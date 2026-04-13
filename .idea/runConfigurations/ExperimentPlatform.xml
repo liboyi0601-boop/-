@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="ExperimentPlatform" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="main.ExperimentPlatform" />
+    <module name="WorkflowIaaS1" />
+    <shortenClasspath name="MANIFEST" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 " />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/WorkflowIaaS1" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
