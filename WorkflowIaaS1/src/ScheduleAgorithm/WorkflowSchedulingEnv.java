@@ -80,6 +80,22 @@ public class WorkflowSchedulingEnv
 		}
 	}
 
+	public void applyAction(SchedulingAction action)
+	{
+		if(action.getActionType() == SchedulingActionType.ALLOCATE_TO_EXISTING_VM)
+		{
+			allocateReadyWTaskToSaaSVm(action.getTask(), action.getTargetVm(), action.getRealDataArrival());
+		}
+		else if(action.getActionType() == SchedulingActionType.LEASE_NEW_VM_AND_ALLOCATE)
+		{
+			SaaSVm newVm = scaleUpVm(StaticfinalTags.currentTime, action.getNewVmType());
+			if(newVm != null)
+			{
+				allocateReadyWTaskToNewLeasedVm(action.getTask(), newVm, action.getReadyStartTime());
+			}
+		}
+	}
+
 	public void allocateReadyWTaskToSaaSVm(WTask task, SaaSVm vm, int realDataArrival)
 	{
 		int vmRealReadyTime = StaticfinalTags.currentTime;

@@ -9,9 +9,21 @@ import vmInfo.VmResource.VmParameter;
 import workflow.ConstraintWTask;
 import workflow.WTask;
 
-public class NosfBaselinePolicy
+public class NosfBaselinePolicy implements SchedulingPolicy
 {
-	public SchedulingDecision choosePlacement(WTask task, List<SaaSVm> vmList)
+	public SchedulingAction selectAction(WTask task, List<SaaSVm> vmList)
+	{
+		SchedulingDecision decision = choosePlacementDecision(task, vmList);
+
+		if(decision.useExistingVm)
+		{
+			return SchedulingAction.allocateToExistingVm(task, decision.targetVm, decision.realDataArrival);
+		}
+
+		return SchedulingAction.leaseNewVmAndAllocate(task, decision.readyStartTime, decision.newVmType);
+	}
+
+	private SchedulingDecision choosePlacementDecision(WTask task, List<SaaSVm> vmList)
 	{
 		int realDataArrivalList[] = computeRealDataArrivalList(task, vmList);
 		double minCost = Double.MAX_VALUE;
@@ -213,13 +225,13 @@ public class NosfBaselinePolicy
 		return level;
 	}
 
-	public static final class SchedulingDecision
+	private static final class SchedulingDecision
 	{
-		public final boolean useExistingVm;
-		public final SaaSVm targetVm;
-		public final int realDataArrival;
-		public final int readyStartTime;
-		public final int newVmType;
+		private final boolean useExistingVm;
+		private final SaaSVm targetVm;
+		private final int realDataArrival;
+		private final int readyStartTime;
+		private final int newVmType;
 
 		private SchedulingDecision(boolean useExistingVm, SaaSVm targetVm, int realDataArrival,
 				int readyStartTime, int newVmType)

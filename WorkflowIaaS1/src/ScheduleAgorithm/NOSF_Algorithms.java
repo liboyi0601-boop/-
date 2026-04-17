@@ -23,7 +23,7 @@ public class NOSF_Algorithms
 
 	private final WorkflowSchedulingEnv env;
 	private final NosfPreprocessor preprocessor;
-	private final NosfBaselinePolicy baselinePolicy;
+	private final SchedulingPolicy baselinePolicy;
 	private final StateBuilder stateBuilder;
 
 	public NOSF_Algorithms() throws Exception
@@ -386,22 +386,8 @@ public class NOSF_Algorithms
 		
 		for(WTask scheduleTask: taskList) //对每个任务进行调度
 		{
-			NosfBaselinePolicy.SchedulingDecision decision = baselinePolicy.choosePlacement(scheduleTask, vmList);
-			
-			if(decision.useExistingVm)//如果找到这样的合适VM
-			{
-				env.allocateReadyWTaskToSaaSVm(scheduleTask, decision.targetVm, decision.realDataArrival);//将当前任务分配到虚拟机targetVm上
-			}
-			else
-			{//没有找到，则增加一个新的VM
-				SaaSVm newVm = env.scaleUpVm(StaticfinalTags.currentTime, decision.newVmType);
-				if(newVm != null)
-				{
-					env.allocateReadyWTaskToNewLeasedVm(scheduleTask, newVm, decision.readyStartTime); //把任务分配到VM上
-				}
-
-			}
-
+			SchedulingAction action = baselinePolicy.selectAction(scheduleTask, vmList);
+			env.applyAction(action);
 		}//end for(WTask scheduleTask: taskList)
 			
 	}/*end: scheduleReadyTaskToVM*/
