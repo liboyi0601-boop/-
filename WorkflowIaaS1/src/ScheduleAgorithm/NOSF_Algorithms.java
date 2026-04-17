@@ -10,7 +10,6 @@ import java.util.List;
 import share.PerformanceValue;
 import share.StaticfinalTags;
 import vmInfo.SaaSVm;
-import vmInfo.VmResource.VmParameter;
 import vmInfo.VmResource;
 import workflow.ConstraintWTask;
 import workflow.WTask;
@@ -27,12 +26,14 @@ public class NOSF_Algorithms
 	private List<Workflow> workflowList; //工作流集合,所有提交来的工作流集合
 	private VmResource VmRes; //VM资源
 	private final NosfPreprocessor preprocessor;
+	private final NosfBaselinePolicy baselinePolicy;
 
 	public NOSF_Algorithms() throws Exception
 	{
 		this.VmRes = new VmResource(); //初始化VM资源
 		this.workflowList = new ArrayList<Workflow>(); //初始化工作流列表
 		this.preprocessor = new NosfPreprocessor();
+		this.baselinePolicy = new NosfBaselinePolicy();
 	}
 	
 	/*=========================================================================================================*/
@@ -452,216 +453,19 @@ public class NOSF_Algorithms
 		
 		for(WTask scheduleTask: taskList) //对每个任务进行调度
 		{
-			double minCost = Double.MAX_VALUE;
-			SaaSVm MapTargetVm = null;
-			int RealDataArrivalList[] = new int [vmList.size()];//存储任务在各个VM上比较的数据到达时间
+			NosfBaselinePolicy.SchedulingDecision decision = baselinePolicy.choosePlacement(scheduleTask, vmList);
 			
-			for(SaaSVm vm: vmList) //寻找虚拟机,虚拟机为空闲,或者虚拟机的等待任务为空
+			if(decision.useExistingVm)//如果找到这样的合适VM
 			{
-				int realDataArrival = Integer.MIN_VALUE;
-				//找出当前任务若调度到该VM上，自身父任务最大数据到达的时间
-				for(ConstraintWTask parentCon: scheduleTask.getParentTaskList()) 
-				{//找出任务task的父任务的最大真实数据到达和近似到达时间										
-					int DataArrival = 0;
-					//int DataArrivalWithConfidency = 0;
-					
-					//判断是否VM上的任务就是该任务的父任务
-					if(vm.getWTaskList().contains(parentCon.getWTask()))
-					{
-						DataArrival = parentCon.getWTask().getRealFinishTime();
-					}
-					else
-					{
-						DataArrival = parentCon.getWTask().getRealFinishTime() 
-								+ parentCon.getDataSize()/StaticfinalTags.bandwidth;
-					}
-					
-					if(DataArrival > realDataArrival)
-					{
-						realDataArrival = DataArrival;
-						RealDataArrivalList[vmList.indexOf(vm)]=realDataArrival;
-					}
-									
-				}//end: for(ConstraintWTask parentCon: readyTask.getParentTaskList())
-								
-				
-				if(vm.getWaitingWTask().getTaskId().equals("initial"))
-				{//虚拟机的正在等待任务为空
-					if(vm.getExecutingWTask().getTaskId().equals("initial"))
-					{//虚拟机的正在执行任务为空
-						int vmReadyTime = StaticfinalTags.currentTime; //开始时间等于当前时间
-						//int readyStartTime = scheduleTask.getEarliestStartTime(); //就绪任务的数据就绪时间
-						int readyStartTime = RealDataArrivalList[vmList.indexOf(vm)]; //就绪任务的数据就绪时间
-						
-						//找出VM就绪和任务数据就绪之间的最大者作为任务的可开始时间
-						if (vmReadyTime > readyStartTime)
-						{
-							readyStartTime = vmReadyTime;
-						}
-						
-						//用当前需要调度任务的近似执行时间*VM因子，计算估计执行时间
-						int executionTimeWithConfidency = (int)(scheduleTask.getExecutionTimeWithConfidency()*vm.getVmFactor());
-						double cost = executionTimeWithConfidency*vm.getVmPrice(); //计算估计成本
-						//由任务可开始执行时间+近似执行时间作近似完成时间
-						int finishTimeWithConfidency = readyStartTime + executionTimeWithConfidency; //计算估计的完成时间
-						
-						//选择使得在subdeadline之前能估计完成的VM。
-						if(finishTimeWithConfidency <= scheduleTask.getSubDeadLine())
-						{
-							if(cost<minCost)
-							{
-								minCost = cost;
-					//			MapTargetVm = vm; //找到最小成本的VM
-							}
-						}						
-					}
-					else
-					{//虚拟机的等待任务为空，而虚拟机上有正在执行的任务
-						
-						//用VM上正在执行任务的近似执行时长，即正在执行的任务的近似完成时间作为VM的可以时间，即开始时间
-						int vmReadyTime = vm.getExecutingWTask().getFinishTimeWithConfidency(); 
-						//int readyStartTime = scheduleTask.getEarliestStartTime(); //就绪任务的数据就绪时间
-						int readyStartTime = RealDataArrivalList[vmList.indexOf(vm)]; //就绪任务的数据就绪时间
-						
-						//找出VM就绪和任务数据就绪之间的最大者作为任务的可开始时间
-						if(vmReadyTime > readyStartTime)
-						{
-							readyStartTime = vmReadyTime;
-						}
-						
-						//用当前需要调度任务的近似执行时间*VM因子，计算估计执行时间
-						int executionTimeWithConfidency = (int)(scheduleTask.getExecutionTimeWithConfidency()*vm.getVmFactor());
-						double cost = executionTimeWithConfidency*vm.getVmPrice(); //计算估计成本
-						//由任务可开始执行时间+近似执行时间作近似完成时间
-						int finishTimeWithConfidency = readyStartTime + executionTimeWithConfidency; //计算估计的完成时间
-						
-						//选择使得近似完成时间在“当前时刻”+subdeadline之前能估计完成的VM。		
-						if(finishTimeWithConfidency <= scheduleTask.getSubDeadLine())
-						{
-							if(cost<minCost)
-							{
-								minCost = cost;
-					//			MapTargetVm = vm; //找到最小成本的VM
-							}
-						}	
-					}/*end: if(vm.getExecutingWTask().getTaskId().equals("initial"))...else...*/
-					
-				}//end if(vm.getWaitingWTask().getTaskId().equals("initial"))
-				
-			}//寻找虚拟机结束	end for(SaaSVm vm: vmList)
-			
-			
-			List<SaaSVm> MapTargetVmSet = new ArrayList<SaaSVm>(); //存储多个具有相同最小成本的VM
-			//把多个具有相同最小成本的VM加入集合
-			for(SaaSVm vm: vmList)
-			{
-				if(vm.getWaitingWTask().getTaskId().equals("initial"))
-				{
-					if(vm.getExecutingWTask().getTaskId().equals("initial"))
-					{
-						int vmReadyTime = StaticfinalTags.currentTime; //开始时间等于当前时间
-						//int readyStartTime = scheduleTask.getEarliestStartTime();
-						int readyStartTime = RealDataArrivalList[vmList.indexOf(vm)];
-						
-						if (vmReadyTime > readyStartTime)
-						{
-							readyStartTime = vmReadyTime;
-						}
-						
-						//用当前需要调度任务的近似执行时间*VM因子，计算估计执行时间
-						int executionTimeWithConfidency = (int)(scheduleTask.getExecutionTimeWithConfidency()*vm.getVmFactor());
-						double cost = executionTimeWithConfidency*vm.getVmPrice(); //计算估计成本
-						int finishTimeWithConfidency = readyStartTime + executionTimeWithConfidency; //计算估计的完成时间
-						
-						//选择使得在subdeadline之前能估计完成的VM。
-						if(finishTimeWithConfidency <= scheduleTask.getSubDeadLine())
-						{
-							if(cost == minCost)
-							{
-								MapTargetVmSet.add(vm); //把最小成本的VM加入集合
-							}
-						}
-					}
-					else
-					{
-						//虚拟机的等待任务为空，而虚拟机上有正在执行的任务
-						
-						//用VM上正在执行任务的近似执行时长，即正在执行的任务的近似完成时间作为VM的可以时间，即开始时间
-						int vmReadyTime = vm.getExecutingWTask().getFinishTimeWithConfidency();
-						//int readyStartTime = scheduleTask.getEarliestStartTime();
-						int readyStartTime = RealDataArrivalList[vmList.indexOf(vm)];
-						
-						if (vmReadyTime > readyStartTime)
-						{
-							readyStartTime = vmReadyTime;
-						}
-						
-						//用当前需要调度任务的近似执行时间*VM因子，计算估计执行时间
-						int executionTimeWithConfidency = (int)(scheduleTask.getExecutionTimeWithConfidency()*vm.getVmFactor());
-						double cost = executionTimeWithConfidency*vm.getVmPrice(); //计算估计成本
-						int finishTimeWithConfidency = readyStartTime + executionTimeWithConfidency; //计算估计的完成时间
-						
-						if(finishTimeWithConfidency <= scheduleTask.getSubDeadLine())
-						{
-							if(cost == minCost)
-							{
-								MapTargetVmSet.add(vm); //把最小成本的VM加入集合
-							}
-						}
-					} //end: if(vm.getExecutingWTask().getTaskId().equals("initial"))
-				} //end: if(vm.getWaitingWTask().getTaskId().equals("initial"))
-			}//遍历相同最小成本VM结束
-			
-			
-			//在相同最小成本的VM中找出空闲时间最小的VM
-			int minIdleTime = Integer.MAX_VALUE;
-			for(SaaSVm vm: MapTargetVmSet)
-			{
-				int vmReadyTime = StaticfinalTags.currentTime; //获得VM就绪时间
-					
-				if(!vm.getExecutingWTask().getTaskId().equals("initial"))
-				{//如果VM上有正在执行的任务
-					vmReadyTime = vm.getExecutingWTask().getFinishTimeWithConfidency(); //用正在执行的任务的近似完成时间做就绪时间
-				}
-				//int readyStartTime = scheduleTask.getEarliestStartTime();
-				int readyStartTime = RealDataArrivalList[vmList.indexOf(vm)];
-				
-				//找出VM就绪和任务数据就绪之间的最大者作为任务的可开始时间
-				if(vmReadyTime > readyStartTime) 
-				{
-					readyStartTime = vmReadyTime; //用VM就绪时间作任务可开始时间
-				}
-					
-				int IdleTime = readyStartTime - vmReadyTime; //求出VM空闲时间
-				if(IdleTime < minIdleTime)
-				{
-					minIdleTime = IdleTime; //获得最小的空闲
-					MapTargetVm = vm; //获得最小空闲的VM
-				}
-				
-			}
-			
-
-			if(MapTargetVm != null)//如果找到这样的合适VM
-			{
-				allocateReadyWTaskToSaaSVm(scheduleTask, MapTargetVm, RealDataArrivalList[vmList.indexOf(MapTargetVm)]);//将当前任务分配到虚拟机targetVm上
+				allocateReadyWTaskToSaaSVm(scheduleTask, decision.targetVm, decision.realDataArrival);//将当前任务分配到虚拟机targetVm上
 			}
 			else
 			{//没有找到，则增加一个新的VM
-				int readyStartTime = scheduleTask.getEarliestStartTime();
-				//找出VM就绪和任务数据就绪之间的最大者作为任务的可开始时间
-				if(StaticfinalTags.currentTime > readyStartTime)
-				{
-					readyStartTime = StaticfinalTags.currentTime;
-				}
-				
-				//确定新增VM类型
-				int MapVmType = determineSaaSVmType(scheduleTask, readyStartTime);
 				int VmId = vmList.size();//确定需要增加的VM的id
-				SaaSVm newVm = VmRes.scaleUpVm(VmId, StaticfinalTags.currentTime, MapVmType);
+				SaaSVm newVm = VmRes.scaleUpVm(VmId, StaticfinalTags.currentTime, decision.newVmType);
 				if(newVm != null)
 				{
-					allocateReadyWTaskToNewLeasedVm(scheduleTask, newVm, readyStartTime); //把任务分配到VM上
+					allocateReadyWTaskToNewLeasedVm(scheduleTask, newVm, decision.readyStartTime); //把任务分配到VM上
 					vmList.add(newVm); //将新虚拟机加入VM列表
 				}
 
@@ -816,61 +620,6 @@ public class NOSF_Algorithms
 	
 	/*======================================================================================================*/
 	
-	/**确定增加虚拟机的类型*/
-	public int determineSaaSVmType(WTask task , int startTime)
-	{
-		int level = 0;
-		
-		int grade6 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_7.getFactor());
-		int grade5 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_6.getFactor());
-		int grade4 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_5.getFactor());
-		int grade3 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_4.getFactor());
-		int grade2 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_3.getFactor());
-		int grade1 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_2.getFactor());
-		int grade0 = startTime + (int)(task.getExecutionTimeWithConfidency()*VmParameter.Type_1.getFactor());
-		
-		if(grade6 <= task.getSubDeadLine())
-		{
-			level = 6;
-		}
-		else if(grade5 <= task.getSubDeadLine())
-		{
-			level = 5;
-		}
-		else if(grade4 <= task.getSubDeadLine())
-		{
-			level = 4;
-		}
-		else if(grade3 <= task.getSubDeadLine())
-		{
-			level = 3;
-		}
-		else if(grade2 <= task.getSubDeadLine())
-		{
-			level = 2;
-		}
-		else if(grade1 <= task.getSubDeadLine())
-		{
-			level = 1;
-		}
-		else if(grade0 <= task.getSubDeadLine())
-		{
-			level = 0;
-		}
-		else  //if(task.getSubDeadLine()>= task.getLeastFinishTime())
-		{
-			level = 0;
-		}
-/*		else
-		{
-			level = -1;
-		}
-*/
-		return level;
-	}
-	
-	/*======================================================================================================*/
-
 	/**输出实验结果*/
 	public void OutputExperimentResult(List<SaaSVm> OffVmList, List<Workflow> workflowList, long totalScheduleTime)
 	{
