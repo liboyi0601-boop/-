@@ -7,10 +7,12 @@ BIN_DIR="$ROOT_DIR/bin"
 LIB_CP="$ROOT_DIR/Lib/*"
 COMPARE_CP="$ROOT_DIR/ComparisonAlgorithm"
 
+rm -rf "$BIN_DIR"
 mkdir -p "$BIN_DIR"
 
 javac \
-  -encoding GBK \
+  --release 8 \
+  -encoding UTF-8 \
   -cp "$LIB_CP:$COMPARE_CP:$SRC_DIR" \
   -d "$BIN_DIR" \
   $(find "$SRC_DIR" -name '*.java' | sort)

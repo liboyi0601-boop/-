@@ -57,7 +57,7 @@ public class ResourceUti
 		else if(taskType.equals("SRNA_annotate")){return 0.5596;}//SIPHT
 		//==============================================================		
 		else
-		{//找不到对应的任务类型
+		{//鎵句笉鍒板搴旂殑浠诲姟绫诲瀷
 			throw new IllegalArgumentException("Task type (i.e., "+taskType+") is not initiated!");
 		}
 	}
