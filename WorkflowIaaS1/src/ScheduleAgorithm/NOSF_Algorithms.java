@@ -10,8 +10,6 @@ import java.util.List;
 import share.PerformanceValue;
 import share.StaticfinalTags;
 import vmInfo.SaaSVm;
-import vmInfo.VmResource;
-import workflow.ConstraintWTask;
 import workflow.WTask;
 import workflow.Workflow;
 
@@ -23,15 +21,13 @@ import workflow.Workflow;
 public class NOSF_Algorithms 
 {
 
-	private List<Workflow> workflowList; //工作流集合,所有提交来的工作流集合
-	private VmResource VmRes; //VM资源
+	private final WorkflowSchedulingEnv env;
 	private final NosfPreprocessor preprocessor;
 	private final NosfBaselinePolicy baselinePolicy;
 
 	public NOSF_Algorithms() throws Exception
 	{
-		this.VmRes = new VmResource(); //初始化VM资源
-		this.workflowList = new ArrayList<Workflow>(); //初始化工作流列表
+		this.env = new WorkflowSchedulingEnv(); //初始化运行环境
 		this.preprocessor = new NosfPreprocessor();
 		this.baselinePolicy = new NosfBaselinePolicy();
 	}
@@ -45,9 +41,9 @@ public class NOSF_Algorithms
 
 		preprocessor.initializeExecutionTimeEstimate(workflowList); //计算出每个任务在调度时使用的近似基准执行时间
 		
-		int VmId = VmRes.getActiveVmList().size(); //获取数据中心虚拟机list的大小
-		List<SaaSVm> ActiveVmList =VmRes.getActiveVmList(); //数据中心活动VM列表，初始为0
-		List<SaaSVm> OffVmList = VmRes.getOffVmList(); //数据中心已关闭的VM列表
+		List<SaaSVm> ActiveVmList = env.getActiveVmList(); //数据中心活动VM列表，初始为0
+		List<SaaSVm> OffVmList = env.getOffVmList(); //数据中心已关闭的VM列表
+		List<WTask> GlobalTaskPool = env.getGlobalTaskPool(); //任务池，放置全局等待任务
 		long totalScheduleTime = 0;
 		
 		int TotalTask = 0;
@@ -57,7 +53,6 @@ public class NOSF_Algorithms
 		}
 		System.out.println("总的workflow数："+workflowList.size()+"  总任务数："+TotalTask);
 		
-		List<WTask> GlobalTaskPool = new ArrayList<WTask>(); //任务池，放置全局等待任务
 		int sum = 0;
 		
 		/*对所有工作流进行处理*/
@@ -123,19 +118,7 @@ public class NOSF_Algorithms
 		
 //			System.out.println("当前VM的ID"+VmId+" activeVmNum:"+VmRes.getActiveVmList().size()+" offVmNum:"+VmRes.getOffVmList().size());
 //			System.out.println("就绪任务数：" + readyWTaskList.size());
-			VmId = ActiveVmList.size()+OffVmList.size();
-			
-			for(Workflow addWorkflow: workflowsArriveSynchronously)
-			{//同时到达的工作流还没有分配到VM上的任务加入全局任务池GlobalTaskPool
-				for(WTask addTask: addWorkflow.getTaskList())
-				{
-					if(!addTask.getAllocatedFlag())//找出还没有调度的任务
-					{
-						GlobalTaskPool.add(addTask);//此时全局等待任务池放入的是同时到达的工作流中还未调度的任务
-						                      //多次循环后这个任务池会有很多不同时间到达的工作流（其中还有为调度的任务）
-					}
-				}
-			}
+			env.addUnallocatedTasksToGlobalPool(workflowsArriveSynchronously);
 			
 			int nextArrivalTime = Integer.MAX_VALUE;//用来记录下一个工作流到达的时刻
 			if(i != workflowList.size()-1) //如果i不是最后一个工作流
@@ -245,34 +228,8 @@ public class NOSF_Algorithms
 					//更新下一个完成任务(有多个任务同时完成的情况)
 					//更新当前的时间，可由虚拟机上正在执行任务的真正完成时间确定，让当前时间为虚拟机执行完当前任务的实际时间
 					StaticfinalTags.currentTime = nextFinishTime;
-					List<WTask> FinishedTaskSet = new ArrayList<WTask>();
-										
-					for(SaaSVm nextFinishVm: nextFinishVmSet)
-					{
-						WTask finishedTask = nextFinishVm.getExecutingWTask();
-					
-						//对VM上有等待任务和无等待任务分别处理，目的让VM把已有的等待任务执行完
-						if(nextFinishVm.getWaitingWTask().getBaseExecutionTime() != -1)
-						{//虚拟机上有正在等待任务，要让正在执行的任务状态设成完成，正在等待的任务立即变为执行状态
-							nextFinishVm.getExecutingWTask().setFinishFlag(true); //设置当前VM上的任务的执行完成标致
-							nextFinishVm.setExecutingWTask(nextFinishVm.getWaitingWTask());//把VM上的等待任务设为执行状态
-							nextFinishVm.setWaitingWTask(new WTask());//设置后续的等待任务实例，此时为空实例没有内容					
-						}
-						else
-						{//虚拟机上没有正在等待任务，要让正在执行的任务状态设成完成
-							nextFinishVm.getExecutingWTask().setFinishFlag(true); //设置当前VM上的任务的执行完成标致
-							nextFinishVm.setExecutingWTask(new WTask()); //设置正执行的任务实例，此时为空实例没有内容
-						}/*经过该if语句后这个特定的VM上正执行的任务已经执行完毕，若有等待的任务也已立即变成执行状态*/
-					
-						FinishedTaskSet.add(finishedTask);
-						sum++;
-						
-//						if(finishedTask.getTaskId().equals("ID00046"))
-//							System.out.println("here");
-					
-//						System.out.println("工作流:"+finishedTask.getTaskWorkFlowId()+"的任务："+finishedTask.getTaskId()+"完成");
-						
-					}
+					List<WTask> FinishedTaskSet = env.completeExecutingTasks(nextFinishVmSet);
+					sum = sum + FinishedTaskSet.size();
 					
 //					long starTime03 = getCpuTime();
 					long starTime03 = System.currentTimeMillis();
@@ -294,16 +251,7 @@ public class NOSF_Algorithms
 					totalScheduleTime = totalScheduleTime + (endTime03-starTime03);
 					//VmId = ActiveVmList.size() + OffVmList.size();
 					
-					for(WTask allocatedWtask: candidateReadyTaskList)
-					{//将已经调度的任务从GlobalTaskPool中移除
-						if(allocatedWtask.getAllocatedFlag())
-						{
-							if(!GlobalTaskPool.remove(allocatedWtask))
-							{
-								System.out.println("Error: the allocatedWTask cannot be found in GlobalTaskPool");
-							}
-						}
-					}//end for(WTask allocatedWtask: candidateWTaskList)									
+					env.removeAllocatedTasksFromGlobalPool(candidateReadyTaskList);
 				
 				}/*end: if(nextFinishTime <= nextUrgentTime && nextFinishTime <= turnOffVmTime)*/
 				//任务完成后的相关更新完毕
@@ -316,22 +264,7 @@ public class NOSF_Algorithms
 					
 					//System.out.println("有VM关机");
 					StaticfinalTags.currentTime = turnOffVmTime; //更新系统当前的时间
-					for(SaaSVm turnOffVm: turnOffVmSet)
-					{
-						int workTime = turnOffVmTime - turnOffVm.getVmStartWorkTime(); //计算VM活动时长
-						
-						//在前面求最早turnOffVmTime中已经把不足1小时的时间填充为一个整时间槽长度
-						double cost = (workTime * turnOffVm.getVmPrice()) / StaticfinalTags.VmSlot; //计算该VM成本
-						
-						//System.out.println("VM:"+turnOffVm.getVmID()+" 类型："+turnOffVm.getVmType()+" 关闭");
-						
-						//设置VM的关闭信息，并计算VM的成本
-						turnOffVm.setEndWorkTime(turnOffVmTime); //设置VM结束时间
-						turnOffVm.setTotalCost(cost); //设置VM工作成本
-						turnOffVm.setVmStatus(false); //设置VM状态
-						ActiveVmList.remove(turnOffVm);
-						OffVmList.add(turnOffVm);
-					}
+					env.turnOffVmSet(turnOffVmSet, turnOffVmTime);
 																														
 				}//关闭虚拟机结束
 				
@@ -428,9 +361,7 @@ public class NOSF_Algorithms
 		
 		OutputExperimentResult(OffVmList, workflowList, totalScheduleTime);
 		
-		workflowList.clear();
-		OffVmList.clear();
-		ActiveVmList.clear();
+		env.clearRuntimeState();
 		
 	}/*end: ScheduleWorkflow_By_OSDS()*/
 	
@@ -457,16 +388,14 @@ public class NOSF_Algorithms
 			
 			if(decision.useExistingVm)//如果找到这样的合适VM
 			{
-				allocateReadyWTaskToSaaSVm(scheduleTask, decision.targetVm, decision.realDataArrival);//将当前任务分配到虚拟机targetVm上
+				env.allocateReadyWTaskToSaaSVm(scheduleTask, decision.targetVm, decision.realDataArrival);//将当前任务分配到虚拟机targetVm上
 			}
 			else
 			{//没有找到，则增加一个新的VM
-				int VmId = vmList.size();//确定需要增加的VM的id
-				SaaSVm newVm = VmRes.scaleUpVm(VmId, StaticfinalTags.currentTime, decision.newVmType);
+				SaaSVm newVm = env.scaleUpVm(StaticfinalTags.currentTime, decision.newVmType);
 				if(newVm != null)
 				{
-					allocateReadyWTaskToNewLeasedVm(scheduleTask, newVm, decision.readyStartTime); //把任务分配到VM上
-					vmList.add(newVm); //将新虚拟机加入VM列表
+					env.allocateReadyWTaskToNewLeasedVm(scheduleTask, newVm, decision.readyStartTime); //把任务分配到VM上
 				}
 
 			}
@@ -474,149 +403,6 @@ public class NOSF_Algorithms
 		}//end for(WTask scheduleTask: taskList)
 			
 	}/*end: scheduleReadyTaskToVM*/
-	
-	/*======================================================================================================*/
-	
-	/**把一个任务分配到VM上*/
-	public void allocateReadyWTaskToSaaSVm(WTask task, SaaSVm vm, int realDataArrival)
-	{
-		/*如果VM空闲，则VM的开始时间就是当前时间；
-		 *对应外部程序中VM上没有正在执行的任务情况*/
-//		int realStartTime = StaticfinalTags.currentTime;
-//		int startTimeWithConfidency = StaticfinalTags.currentTime;
-		
-		int vmRealReadyTime = StaticfinalTags.currentTime; //用当前时间作VM实际就绪时间
-		int vmReadyTimeWC = StaticfinalTags.currentTime; //用当前时间作VM近似就绪时间
-		//int readyStartTime = task.getEarliestStartTime(); //获取任务数据就绪时间做实际可开始时间
-		//int readyStartTimeWC = task.getEarliestStartTime(); //获取任务数据就绪时间做近似可开始时间
-		int readyStartTime = realDataArrival; //获取任务数据就绪时间做实际可开始时间
-		int readyStartTimeWC = realDataArrival; //获取任务数据就绪时间做近似可开始时间
-				
-		if(!vm.getExecutingWTask().getTaskId().equals("initial"))
-		{
-			/*如果虚拟机上有任务执行的情况，这时VM上正在执行的任务是本方法被调用前，已在VM上执行的任务。
-			 *对应外部程序中VM上有任务执行的情况,要将正在执行的任务实际完成时间作为VM的开始时间*/
-//			realStartTime = vm.getExecutingWTask().getRealFinishTime(); //记录VM上正在执行任务的真实完成时间
-//			startTimeWithConfidency = vm.getExecutingWTask().getFinishTimeWithConfidency(); //记录VM上正执行任务的近似完成时间
-			
-			vmRealReadyTime = vm.getExecutingWTask().getRealFinishTime(); //记录VM上正在执行任务的真实完成时间做真实VM就绪时间
-			vmReadyTimeWC = vm.getExecutingWTask().getFinishTimeWithConfidency(); //记录VM上正执行任务的近似完成时间做近似就绪时间
-			
-		}
-		
-		//获取VM就绪和任务就绪之间的最大
-		if(vmRealReadyTime > readyStartTime) 
-		{
-			readyStartTime = vmRealReadyTime; //实际可开始时间
-		}
-		if(vmReadyTimeWC > readyStartTimeWC)
-		{
-			readyStartTimeWC = vmReadyTimeWC; //近似可开始时间
-		}
-		
-		/*更新任务scheduleTask的状态*/
-		
-		//当前需要调度的任务的真实执行时间（由正态分布产生的基本执行时长）
-		int realExecutionTime = (int)(task.getRealBaseExecutionTime()*vm.getVmFactor());
-//		int realFinishTime = realStartTime + realExecutionTime;
-		int realFinishTime = readyStartTime + realExecutionTime;
-		
-		//分配当前需要调度的任务到VM上得到的近似执行时间和近似完成时间
-		int executionTimeWithConfidency = (int)(task.getExecutionTimeWithConfidency()*vm.getVmFactor());
-//		int finishTimeWithConfidency = startTimeWithConfidency + executionTimeWithConfidency;
-		int finishTimeWithConfidency = readyStartTimeWC + executionTimeWithConfidency;
-		
-		task.setAllocatedFlag(true); //标记已分配
-		task.setAllocateVm(vm);  //设定分配的VM
-//		task.setRealStartTime(realStartTime); 
-		task.setRealStartTime(readyStartTime);//设定真实开始时间
-		
-		task.setRealExecutionTime(realExecutionTime); //设定真实执行时间(正态分布)
-		task.setRealFinishTime(realFinishTime); //设定真实完成时间
-		
-//		task.setStartTimeWithConfidency(startTimeWithConfidency); 
-		task.setStartTimeWithConfidency(readyStartTimeWC); //设定近似开始时间
-		task.setFinishTimeWithConfidency(finishTimeWithConfidency); //设定近似完成时间
-							
-		/*更新虚拟机vm的状态*/
-		vm.setFinishTime(finishTimeWithConfidency); //设定近似完成时间
-		vm.setRealFinishTime(realFinishTime); //设定真实完成时间(正态分布)
-		vm.setReadyTime(finishTimeWithConfidency); //由该VM上任务近似完成时间来表示准备时间
-		vm.getWTaskList().add(task); //把当前需要调度的任务加入VM完成任务的列表
-		
-		if(vm.getExecutingWTask().getTaskId().equals("initial"))
-		{
-			vm.setExecutingWTask(task);
-		}
-		else
-		{
-			vm.setWaitingWTask(task);
-			if(task.getRealStartTime() < vm.getExecutingWTask().getRealFinishTime())
-				System.out.println("等待任务的开始时间 < 执行任务完成时间！in allocateReadyWTaskToSaaSVm()");
-		}
-		
-	}/*end: allocateReadyWTaskToSaaSVm*/
-	
-	/*======================================================================================================*/
-	
-	/**分配任务到新租用的VM上*/
-	public void allocateReadyWTaskToNewLeasedVm(WTask task, SaaSVm vm, int realDataArrival)
-	{
-
-		int vmRealReadyTime = vm.getReadyTime(); //用当前VM初始化后的时间作VM实际就绪时间
-		int vmReadyTimeWC = vm.getReadyTime(); //用当前VM初始化后的时间作VM近似就绪时间
-		int readyStartTime = realDataArrival; //获取任务数据就绪时间做实际可开始时间
-		int readyStartTimeWC = realDataArrival; //获取任务数据就绪时间做近似可开始时间
-				
-		
-		//获取VM就绪和任务就绪之间的最大
-		if(vmRealReadyTime > readyStartTime) 
-		{
-			readyStartTime = vmRealReadyTime; //实际可开始时间
-		}
-		if(vmReadyTimeWC > readyStartTimeWC)
-		{
-			readyStartTimeWC = vmReadyTimeWC; //近似可开始时间
-		}
-		
-		/*更新任务scheduleTask的状态*/
-		
-		//当前需要调度的任务的真实执行时间（由正态分布产生的基本执行时长）
-		int realExecutionTime = (int)(task.getRealBaseExecutionTime()*vm.getVmFactor());
-		int realFinishTime = readyStartTime + realExecutionTime;
-		
-		//分配当前需要调度的任务到VM上得到的近似执行时间和近似完成时间
-		int executionTimeWithConfidency = (int)(task.getExecutionTimeWithConfidency()*vm.getVmFactor());
-		int finishTimeWithConfidency = readyStartTimeWC + executionTimeWithConfidency;
-		
-		task.setAllocatedFlag(true); //标记已分配
-		task.setAllocateVm(vm);  //设定分配的VM
-		
-		task.setRealStartTime(readyStartTime);//设定真实开始时间
-		task.setRealExecutionTime(realExecutionTime); //设定真实执行时间(正态分布)
-		task.setRealFinishTime(realFinishTime); //设定真实完成时间
-		
-		task.setStartTimeWithConfidency(readyStartTimeWC); //设定近似开始时间
-		task.setFinishTimeWithConfidency(finishTimeWithConfidency); //设定近似完成时间
-							
-		/*更新虚拟机vm的状态*/
-		vm.setFinishTime(finishTimeWithConfidency); //设定近似完成时间
-		vm.setRealFinishTime(realFinishTime); //设定真实完成时间(正态分布)
-		vm.setReadyTime(finishTimeWithConfidency); //由该VM上任务近似完成时间来表示准备时间
-		vm.getWTaskList().add(task); //把当前需要调度的任务加入VM完成任务的列表
-		
-		if(vm.getExecutingWTask().getTaskId().equals("initial"))
-		{
-			vm.setExecutingWTask(task);
-		}
-		else
-		{
-			vm.setWaitingWTask(task);
-			if(task.getRealStartTime() < vm.getExecutingWTask().getRealFinishTime())
-				System.out.println("等待任务的开始时间 < 执行任务完成时间！in allocateReadyWTaskToSaaSVm()");
-		}
-
-	}
 	
 	/*======================================================================================================*/
 	
@@ -772,11 +558,11 @@ public class NOSF_Algorithms
        @param list: 所有的工作流，把所有的工作流list都添加到了workflowList*/
 	public void submitWorkflowList(List<Workflow> list)
 	{
-		getWorkflowList().addAll(list);//把所有的工作流都添加到了workflowList
+		env.submitWorkflowList(list);
 	}
 	
 	/**获取工作流，返回一个工作流列表，成员变量workflowList*/
-	public List<Workflow> getWorkflowList() {return workflowList; }
+	public List<Workflow> getWorkflowList() {return env.getWorkflowList(); }
 	
 	/*=====================================================================================================*/
 	
