@@ -47,6 +47,11 @@ public class WorkflowSchedulingEnv
 		return globalTaskPool;
 	}
 
+	public int getCurrentTime()
+	{
+		return StaticfinalTags.currentTime;
+	}
+
 	public void addUnallocatedTasksToGlobalPool(List<Workflow> arrivingWorkflows)
 	{
 		for(Workflow addWorkflow: arrivingWorkflows)

@@ -24,12 +24,14 @@ public class NOSF_Algorithms
 	private final WorkflowSchedulingEnv env;
 	private final NosfPreprocessor preprocessor;
 	private final NosfBaselinePolicy baselinePolicy;
+	private final StateBuilder stateBuilder;
 
 	public NOSF_Algorithms() throws Exception
 	{
 		this.env = new WorkflowSchedulingEnv(); //初始化运行环境
 		this.preprocessor = new NosfPreprocessor();
 		this.baselinePolicy = new NosfBaselinePolicy();
+		this.stateBuilder = new StateBuilder();
 	}
 	
 	/*=========================================================================================================*/
@@ -563,6 +565,11 @@ public class NOSF_Algorithms
 	
 	/**获取工作流，返回一个工作流列表，成员变量workflowList*/
 	public List<Workflow> getWorkflowList() {return env.getWorkflowList(); }
+
+	public SchedulingState buildSchedulingState()
+	{
+		return stateBuilder.build(env);
+	}
 	
 	/*=====================================================================================================*/
 	
