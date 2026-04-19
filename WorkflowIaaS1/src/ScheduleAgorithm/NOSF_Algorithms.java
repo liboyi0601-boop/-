@@ -10,6 +10,7 @@ import java.util.List;
 import share.PerformanceValue;
 import share.StaticfinalTags;
 import vmInfo.SaaSVm;
+import vmInfo.VmResource.VmParameter;
 import workflow.WTask;
 import workflow.Workflow;
 
@@ -25,13 +26,22 @@ public class NOSF_Algorithms
 	private final NosfPreprocessor preprocessor;
 	private final SchedulingPolicy baselinePolicy;
 	private final StateBuilder stateBuilder;
+	private final SchedulingTraceRecorder traceRecorder;
+	private int decisionCount;
 
 	public NOSF_Algorithms() throws Exception
 	{
-		this.env = new WorkflowSchedulingEnv(); //初始化运行环境
+		this(new NoOpSchedulingTraceRecorder());
+	}
+
+	public NOSF_Algorithms(SchedulingTraceRecorder traceRecorder) throws Exception
+	{
+		this.traceRecorder = traceRecorder;
+		this.env = new WorkflowSchedulingEnv(traceRecorder); //初始化运行环境
 		this.preprocessor = new NosfPreprocessor();
 		this.baselinePolicy = new NosfBaselinePolicy();
 		this.stateBuilder = new StateBuilder();
+		this.decisionCount = 0;
 	}
 	
 	/*=========================================================================================================*/
@@ -39,6 +49,7 @@ public class NOSF_Algorithms
 	/**在线动态调度工作流到VM*/
 	public void ScheduleWorkflow_By_NOSF() 
 	{
+		decisionCount = 0;
 		List<Workflow> workflowList = getWorkflowList();
 
 		preprocessor.initializeExecutionTimeEstimate(workflowList); //计算出每个任务在调度时使用的近似基准执行时间
@@ -242,6 +253,7 @@ public class NOSF_Algorithms
 						 * 此时的父任务有分配和完成标记，具体完成时间也已计算
 						 * 前面找出的紧急任务也在这个候选就绪队列中，此时的任务池中没有下一个到达的任务*/					
 					List<WTask> candidateReadyTaskList = preprocessor.collectReadyTasksFromGlobalPool(GlobalTaskPool); //获取就绪任务
+					recordTaskFinish(FinishedTaskSet, candidateReadyTaskList);
 					
 					/*因为刚才这个VM已完成了其上正在执行的任务，前面选的符合立即分配到该VM上的任务也分配完毕。
 					 * 恰恰由于这个一系列动作完成，可能使候选就绪队列中的其他任务也有分配到VM上的机会，
@@ -386,7 +398,9 @@ public class NOSF_Algorithms
 		
 		for(WTask scheduleTask: taskList) //对每个任务进行调度
 		{
+			recordDecisionCandidate(taskList, vmList);
 			SchedulingAction action = baselinePolicy.selectAction(scheduleTask, vmList);
+			recordDecisionChosen(scheduleTask, action);
 			env.applyAction(action);
 		}//end for(WTask scheduleTask: taskList)
 			
@@ -555,6 +569,103 @@ public class NOSF_Algorithms
 	public SchedulingState buildSchedulingState()
 	{
 		return stateBuilder.build(env);
+	}
+
+	private void recordDecisionCandidate(List<WTask> taskList, List<SaaSVm> vmList)
+	{
+		if(!traceRecorder.isEnabled())
+		{
+			return;
+		}
+
+		try
+		{
+			traceRecorder.recordDecisionCandidate(
+					StaticfinalTags.currentTime,
+					buildPendingTaskSet(taskList),
+					vmList,
+					env.getWorkflowList().size(),
+					env.getActiveVmList().size(),
+					env.getOffVmList().size(),
+					env.getGlobalTaskPool().size());
+		}
+		catch(java.io.IOException exception)
+		{
+			throw new IllegalStateException("Failed to record decision_candidate trace event", exception);
+		}
+	}
+
+	private void recordDecisionChosen(WTask scheduleTask, SchedulingAction action)
+	{
+		if(!traceRecorder.isEnabled())
+		{
+			return;
+		}
+
+		SchedulingState snapshot = null;
+		if(traceRecorder.shouldCaptureStateSnapshot(decisionCount))
+		{
+			snapshot = buildSchedulingState();
+		}
+
+		try
+		{
+			traceRecorder.recordDecisionChosen(
+					StaticfinalTags.currentTime,
+					scheduleTask,
+					action,
+					estimateCostIncrement(action),
+					snapshot);
+			decisionCount++;
+		}
+		catch(java.io.IOException exception)
+		{
+			throw new IllegalStateException("Failed to record decision_chosen trace event", exception);
+		}
+	}
+
+	private void recordTaskFinish(List<WTask> finishedTasks, List<WTask> readyTasksAfterFinish)
+	{
+		if(!traceRecorder.isEnabled())
+		{
+			return;
+		}
+
+		try
+		{
+			traceRecorder.recordTaskFinish(StaticfinalTags.currentTime, finishedTasks, readyTasksAfterFinish);
+		}
+		catch(java.io.IOException exception)
+		{
+			throw new IllegalStateException("Failed to record task_finish trace event", exception);
+		}
+	}
+
+	private List<WTask> buildPendingTaskSet(List<WTask> taskList)
+	{
+		List<WTask> pendingTasks = new ArrayList<WTask>();
+		for(WTask task: taskList)
+		{
+			if(!task.getAllocatedFlag())
+			{
+				pendingTasks.add(task);
+			}
+		}
+		return pendingTasks;
+	}
+
+	private double estimateCostIncrement(SchedulingAction action)
+	{
+		if(action.getActionType() == SchedulingActionType.ALLOCATE_TO_EXISTING_VM)
+		{
+			SaaSVm targetVm = action.getTargetVm();
+			int executionTime = (int)(action.getTask().getExecutionTimeWithConfidency() * targetVm.getVmFactor());
+			return executionTime * targetVm.getVmPrice();
+		}
+
+		VmParameter vmParameter = VmParameter.valueOf(action.getNewVmType());
+		int executionTime = (int)(action.getTask().getExecutionTimeWithConfidency() * vmParameter.getFactor());
+		return executionTime * vmParameter.getPrice();
 	}
 	
 	/*=====================================================================================================*/

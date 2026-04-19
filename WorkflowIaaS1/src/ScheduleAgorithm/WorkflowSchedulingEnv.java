@@ -14,12 +14,19 @@ public class WorkflowSchedulingEnv
 	private final List<Workflow> workflowList;
 	private final VmResource vmRes;
 	private final List<WTask> globalTaskPool;
+	private final SchedulingTraceRecorder traceRecorder;
 
 	public WorkflowSchedulingEnv()
+	{
+		this(new NoOpSchedulingTraceRecorder());
+	}
+
+	public WorkflowSchedulingEnv(SchedulingTraceRecorder traceRecorder)
 	{
 		this.workflowList = new ArrayList<Workflow>();
 		this.vmRes = new VmResource();
 		this.globalTaskPool = new ArrayList<WTask>();
+		this.traceRecorder = traceRecorder;
 	}
 
 	public void submitWorkflowList(List<Workflow> list)
@@ -85,6 +92,7 @@ public class WorkflowSchedulingEnv
 		if(action.getActionType() == SchedulingActionType.ALLOCATE_TO_EXISTING_VM)
 		{
 			allocateReadyWTaskToSaaSVm(action.getTask(), action.getTargetVm(), action.getRealDataArrival());
+			recordActionApplied(action, action.getTargetVm());
 		}
 		else if(action.getActionType() == SchedulingActionType.LEASE_NEW_VM_AND_ALLOCATE)
 		{
@@ -93,6 +101,7 @@ public class WorkflowSchedulingEnv
 			{
 				allocateReadyWTaskToNewLeasedVm(action.getTask(), newVm, action.getReadyStartTime());
 			}
+			recordActionApplied(action, newVm);
 		}
 	}
 
@@ -250,6 +259,8 @@ public class WorkflowSchedulingEnv
 			getActiveVmList().remove(turnOffVm);
 			getOffVmList().add(turnOffVm);
 		}
+
+		recordVmTurnoff(turnOffVmSet, turnOffVmTime);
 	}
 
 	public void clearRuntimeState()
@@ -258,5 +269,39 @@ public class WorkflowSchedulingEnv
 		getOffVmList().clear();
 		getActiveVmList().clear();
 		globalTaskPool.clear();
+	}
+
+	private void recordActionApplied(SchedulingAction action, SaaSVm appliedVm)
+	{
+		if(!traceRecorder.isEnabled())
+		{
+			return;
+		}
+
+		try
+		{
+			traceRecorder.recordActionApplied(StaticfinalTags.currentTime, action, appliedVm);
+		}
+		catch(java.io.IOException exception)
+		{
+			throw new IllegalStateException("Failed to record action_applied trace event", exception);
+		}
+	}
+
+	private void recordVmTurnoff(List<SaaSVm> turnOffVmSet, int turnOffVmTime)
+	{
+		if(!traceRecorder.isEnabled())
+		{
+			return;
+		}
+
+		try
+		{
+			traceRecorder.recordVmTurnoff(StaticfinalTags.currentTime, turnOffVmSet, turnOffVmTime);
+		}
+		catch(java.io.IOException exception)
+		{
+			throw new IllegalStateException("Failed to record vm_turnoff trace event", exception);
+		}
 	}
 }
