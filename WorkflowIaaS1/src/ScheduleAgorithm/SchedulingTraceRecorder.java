@@ -13,11 +13,13 @@ public interface SchedulingTraceRecorder extends Closeable
 
 	boolean shouldCaptureStateSnapshot(int decisionIndex);
 
-	void recordDecisionCandidate(int currentTime, List<WTask> readyTasks, List<SaaSVm> candidateVms,
+	void recordDecisionCandidate(int currentTime, TaskCandidateSet taskSet, TaskActionMask taskMask,
+			List<SaaSVm> candidateVms,
 			int workflowCount, int activeVmCount, int offVmCount, int globalTaskPoolSize) throws IOException;
 
-	void recordDecisionChosen(int currentTime, WTask task, SchedulingAction action, double estimatedCostIncrement,
-			SchedulingState snapshot) throws IOException;
+	void recordDecisionChosen(int currentTime, TaskSelection taskSelection, TaskActionMask taskMask,
+			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection,
+			SchedulingAction action, double estimatedCostIncrement, SchedulingState snapshot) throws IOException;
 
 	void recordActionApplied(int currentTime, SchedulingAction action, SaaSVm appliedVm) throws IOException;
 

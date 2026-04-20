@@ -24,8 +24,13 @@ public class NOSF_Algorithms
 
 	private final WorkflowSchedulingEnv env;
 	private final NosfPreprocessor preprocessor;
+	private final NosfBaselinePolicy nosfBaselinePolicy;
 	private final SchedulingPolicy baselinePolicy;
+	private final HierarchicalSchedulingPolicy hierarchicalPolicy;
 	private final StateBuilder stateBuilder;
+	private final CandidateTaskSetBuilder taskCandidateSetBuilder;
+	private final CandidateVmSetBuilder candidateVmSetBuilder;
+	private final ActionMaskBuilder actionMaskBuilder;
 	private final SchedulingTraceRecorder traceRecorder;
 	private int decisionCount;
 
@@ -39,8 +44,13 @@ public class NOSF_Algorithms
 		this.traceRecorder = traceRecorder;
 		this.env = new WorkflowSchedulingEnv(traceRecorder); //初始化运行环境
 		this.preprocessor = new NosfPreprocessor();
-		this.baselinePolicy = new NosfBaselinePolicy();
+		this.nosfBaselinePolicy = new NosfBaselinePolicy();
+		this.baselinePolicy = nosfBaselinePolicy;
+		this.hierarchicalPolicy = nosfBaselinePolicy;
 		this.stateBuilder = new StateBuilder();
+		this.taskCandidateSetBuilder = new CandidateTaskSetBuilder();
+		this.candidateVmSetBuilder = new CandidateVmSetBuilder();
+		this.actionMaskBuilder = new ActionMaskBuilder();
 		this.decisionCount = 0;
 	}
 	
@@ -395,16 +405,67 @@ public class NOSF_Algorithms
 	{
 		//对就绪任务按照权重（最早完成时间）进行升序排序
 		Collections.sort(taskList, new AscendingWTaskByPECT());
-		
-		for(WTask scheduleTask: taskList) //对每个任务进行调度
+
+		if(useBaselineFastPath())
 		{
-			recordDecisionCandidate(taskList, vmList);
-			SchedulingAction action = baselinePolicy.selectAction(scheduleTask, vmList);
-			recordDecisionChosen(scheduleTask, action);
+			scheduleReadyTaskToVmFast(taskList, vmList);
+			return;
+		}
+
+		while(true)
+		{
+			SchedulingState state = buildStateForSelectionIfNeeded();
+			TaskCandidateSet taskSet = taskCandidateSetBuilder.build(taskList, state);
+			if(taskSet.isEmpty())
+			{
+				break;
+			}
+
+			TaskActionMask taskMask = actionMaskBuilder.buildTaskMask(taskSet);
+			recordDecisionCandidate(taskSet, taskMask, vmList);
+
+			TaskSelection taskSelection = hierarchicalPolicy.selectTask(taskSet, state);
+			VmCandidateSet vmSet = candidateVmSetBuilder.build(taskSelection.getSelectedCandidate(), vmList, state);
+			VmActionMask vmMask = actionMaskBuilder.buildVmMask(vmSet);
+			ResourceSelection resourceSelection = hierarchicalPolicy.selectResource(
+					taskSelection.getSelectedCandidate(), vmSet, state);
+			SchedulingAction action = resourceSelection.toSchedulingAction(taskSelection.getSelectedCandidate().getTask());
+			recordDecisionChosen(taskSelection, taskMask, vmSet, vmMask, resourceSelection, action);
 			env.applyAction(action);
-		}//end for(WTask scheduleTask: taskList)
+		}
 			
 	}/*end: scheduleReadyTaskToVM*/
+
+	private boolean useBaselineFastPath()
+	{
+		return !traceRecorder.isEnabled();
+	}
+
+	private void scheduleReadyTaskToVmFast(List<WTask> taskList, List<SaaSVm> vmList)
+	{
+		for(WTask scheduleTask: taskList)
+		{
+			if(scheduleTask.getAllocatedFlag() || scheduleTask.getFinishFlag())
+			{
+				continue;
+			}
+
+			TaskCandidateView taskCandidate = new TaskCandidateView(0, scheduleTask);
+			VmCandidateSet vmSet = candidateVmSetBuilder.build(taskCandidate, vmList, null);
+			ResourceSelection resourceSelection = nosfBaselinePolicy.selectResource(taskCandidate, vmSet, null);
+			SchedulingAction action = resourceSelection.toSchedulingAction(scheduleTask);
+			env.applyAction(action);
+		}
+	}
+
+	private SchedulingState buildStateForSelectionIfNeeded()
+	{
+		if(hierarchicalPolicy != nosfBaselinePolicy)
+		{
+			return buildSchedulingState();
+		}
+		return null;
+	}
 	
 	/*======================================================================================================*/
 	
@@ -571,7 +632,7 @@ public class NOSF_Algorithms
 		return stateBuilder.build(env);
 	}
 
-	private void recordDecisionCandidate(List<WTask> taskList, List<SaaSVm> vmList)
+	private void recordDecisionCandidate(TaskCandidateSet taskSet, TaskActionMask taskMask, List<SaaSVm> vmList)
 	{
 		if(!traceRecorder.isEnabled())
 		{
@@ -582,7 +643,8 @@ public class NOSF_Algorithms
 		{
 			traceRecorder.recordDecisionCandidate(
 					StaticfinalTags.currentTime,
-					buildPendingTaskSet(taskList),
+					taskSet,
+					taskMask,
 					vmList,
 					env.getWorkflowList().size(),
 					env.getActiveVmList().size(),
@@ -595,7 +657,8 @@ public class NOSF_Algorithms
 		}
 	}
 
-	private void recordDecisionChosen(WTask scheduleTask, SchedulingAction action)
+	private void recordDecisionChosen(TaskSelection taskSelection, TaskActionMask taskMask,
+			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection, SchedulingAction action)
 	{
 		if(!traceRecorder.isEnabled())
 		{
@@ -612,7 +675,11 @@ public class NOSF_Algorithms
 		{
 			traceRecorder.recordDecisionChosen(
 					StaticfinalTags.currentTime,
-					scheduleTask,
+					taskSelection,
+					taskMask,
+					vmSet,
+					vmMask,
+					resourceSelection,
 					action,
 					estimateCostIncrement(action),
 					snapshot);
@@ -639,19 +706,6 @@ public class NOSF_Algorithms
 		{
 			throw new IllegalStateException("Failed to record task_finish trace event", exception);
 		}
-	}
-
-	private List<WTask> buildPendingTaskSet(List<WTask> taskList)
-	{
-		List<WTask> pendingTasks = new ArrayList<WTask>();
-		for(WTask task: taskList)
-		{
-			if(!task.getAllocatedFlag())
-			{
-				pendingTasks.add(task);
-			}
-		}
-		return pendingTasks;
 	}
 
 	private double estimateCostIncrement(SchedulingAction action)

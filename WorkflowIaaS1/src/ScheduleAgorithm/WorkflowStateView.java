@@ -17,11 +17,16 @@ public class WorkflowStateView
 	private final int taskCount;
 	private final int allocatedTaskCount;
 	private final int finishedTaskCount;
+	private final double normalizedSlack;
+	private final double violationRiskScore;
+	private final double readyTaskDensity;
+	private final int remainingCriticalPathLength;
 	private final List<String> taskIds;
 
 	public WorkflowStateView(int workflowId, String workflowName, int arrivalTime, int makespan, int deadline,
 			boolean startedFlag, int finishTime, boolean successfulOrNot, int taskCount, int allocatedTaskCount,
-			int finishedTaskCount, List<String> taskIds)
+			int finishedTaskCount, double normalizedSlack, double violationRiskScore, double readyTaskDensity,
+			int remainingCriticalPathLength, List<String> taskIds)
 	{
 		this.workflowId = workflowId;
 		this.workflowName = workflowName;
@@ -34,6 +39,10 @@ public class WorkflowStateView
 		this.taskCount = taskCount;
 		this.allocatedTaskCount = allocatedTaskCount;
 		this.finishedTaskCount = finishedTaskCount;
+		this.normalizedSlack = normalizedSlack;
+		this.violationRiskScore = violationRiskScore;
+		this.readyTaskDensity = readyTaskDensity;
+		this.remainingCriticalPathLength = remainingCriticalPathLength;
 		this.taskIds = Collections.unmodifiableList(new ArrayList<String>(taskIds));
 	}
 
@@ -90,6 +99,26 @@ public class WorkflowStateView
 	public int getFinishedTaskCount()
 	{
 		return finishedTaskCount;
+	}
+
+	public double getNormalizedSlack()
+	{
+		return normalizedSlack;
+	}
+
+	public double getViolationRiskScore()
+	{
+		return violationRiskScore;
+	}
+
+	public double getReadyTaskDensity()
+	{
+		return readyTaskDensity;
+	}
+
+	public int getRemainingCriticalPathLength()
+	{
+		return remainingCriticalPathLength;
 	}
 
 	public List<String> getTaskIds()

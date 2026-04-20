@@ -9,7 +9,7 @@ import vmInfo.VmResource.VmParameter;
 import workflow.ConstraintWTask;
 import workflow.WTask;
 
-public class NosfBaselinePolicy implements SchedulingPolicy
+public class NosfBaselinePolicy implements SchedulingPolicy, HierarchicalSchedulingPolicy
 {
 	public SchedulingAction selectAction(WTask task, List<SaaSVm> vmList)
 	{
@@ -21,6 +21,84 @@ public class NosfBaselinePolicy implements SchedulingPolicy
 		}
 
 		return SchedulingAction.leaseNewVmAndAllocate(task, decision.readyStartTime, decision.newVmType);
+	}
+
+	public TaskSelection selectTask(TaskCandidateSet taskSet, SchedulingState state)
+	{
+		for(int index = 0; index < taskSet.size(); index++)
+		{
+			TaskCandidateView candidate = taskSet.get(index);
+			if(!candidate.getTask().getAllocatedFlag() && !candidate.getTask().getFinishFlag())
+			{
+				return new TaskSelection(index, candidate);
+			}
+		}
+
+		throw new IllegalStateException("No valid task candidate found for hierarchical selection");
+	}
+
+	public ResourceSelection selectResource(TaskCandidateView selectedTask, VmCandidateSet vmSet, SchedulingState state)
+	{
+		double minCost = Double.MAX_VALUE;
+		for(VmCandidateView candidate: vmSet.getCandidates())
+		{
+			if(candidate.getCandidateKind() != VmCandidateKind.EXISTING_VM)
+			{
+				continue;
+			}
+			if(candidate.getEstimatedCostIfAssigned() < minCost)
+			{
+				minCost = candidate.getEstimatedCostIfAssigned();
+			}
+		}
+
+		List<VmCandidateView> minCostVmSet = new ArrayList<VmCandidateView>();
+		for(VmCandidateView candidate: vmSet.getCandidates())
+		{
+			if(candidate.getCandidateKind() != VmCandidateKind.EXISTING_VM)
+			{
+				continue;
+			}
+			if(candidate.getEstimatedCostIfAssigned() == minCost)
+			{
+				minCostVmSet.add(candidate);
+			}
+		}
+
+		VmCandidateView targetVmCandidate = null;
+		double bestIdleGapFit = Double.NEGATIVE_INFINITY;
+
+		for(VmCandidateView candidate: minCostVmSet)
+		{
+			if(candidate.getIdleGapFitScore() > bestIdleGapFit)
+			{
+				bestIdleGapFit = candidate.getIdleGapFitScore();
+				targetVmCandidate = candidate;
+			}
+		}
+
+		if(targetVmCandidate != null)
+		{
+			return new ResourceSelection(targetVmCandidate.getCandidateIndex(), targetVmCandidate);
+		}
+
+		int readyStartTime = selectedTask.getTask().getEarliestStartTime();
+		if(StaticfinalTags.currentTime > readyStartTime)
+		{
+			readyStartTime = StaticfinalTags.currentTime;
+		}
+
+		int targetLevel = determineSaaSVmType(selectedTask.getTask(), readyStartTime);
+		for(VmCandidateView candidate: vmSet.getCandidates())
+		{
+			if(candidate.getCandidateKind() == VmCandidateKind.LEASE_NEW_VM_TYPE
+					&& candidate.getNewVmType() == targetLevel)
+			{
+				return new ResourceSelection(candidate.getCandidateIndex(), candidate);
+			}
+		}
+
+		throw new IllegalStateException("No matching new-vm candidate found for hierarchical selection");
 	}
 
 	private SchedulingDecision choosePlacementDecision(WTask task, List<SaaSVm> vmList)

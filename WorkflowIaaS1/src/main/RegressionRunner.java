@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import ScheduleAgorithm.BaselineDiffAnalyzer;
 import ScheduleAgorithm.ExperimentManifest;
 import ScheduleAgorithm.ExperimentMetrics;
 import ScheduleAgorithm.JsonSupport;
@@ -37,10 +38,22 @@ public class RegressionRunner
 	{
 		RunnerOptions options = RunnerOptions.parse(args);
 		List<Path> runDirectories = new ArrayList<Path>();
+		Map<RegressionSuite, Path> runDirectoryBySuite = new LinkedHashMap<RegressionSuite, Path>();
 
 		for(RegressionSuite suite: options.suites)
 		{
-			runDirectories.add(runSuite(suite, options));
+			Path runDirectory = runSuite(suite, options);
+			runDirectories.add(runDirectory);
+			runDirectoryBySuite.put(suite, runDirectory);
+			validatePhaseSevenTrace(runDirectory, options.traceEnabled);
+		}
+
+		if(options.traceEnabled && runDirectoryBySuite.containsKey(RegressionSuite.GOLDEN))
+		{
+			Path goldenRepeatRun = runSuite(RegressionSuite.GOLDEN, options);
+			runDirectories.add(goldenRepeatRun);
+			validatePhaseSevenTrace(goldenRepeatRun, true);
+			assertNoDivergence(runDirectoryBySuite.get(RegressionSuite.GOLDEN), goldenRepeatRun);
 		}
 
 		System.out.println("Regression suites completed: " + runDirectories.size());
@@ -201,6 +214,70 @@ public class RegressionRunner
 		while((count = input.read(buffer)) != -1)
 		{
 			output.write(buffer, 0, count);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void validatePhaseSevenTrace(Path runDirectory, boolean traceEnabled) throws IOException
+	{
+		if(!traceEnabled)
+		{
+			return;
+		}
+
+		Path tracePath = runDirectory.resolve("trace.jsonl");
+		List<String> lines = Files.readAllLines(tracePath, StandardCharsets.UTF_8);
+		int invalidTaskActionCount = 0;
+		int invalidVmActionCount = 0;
+
+		for(String line: lines)
+		{
+			if(line.trim().isEmpty())
+			{
+				continue;
+			}
+
+			Object parsed = JsonSupport.parseJson(line);
+			if(!(parsed instanceof Map<?, ?>))
+			{
+				continue;
+			}
+
+			Map<String, Object> event = (Map<String, Object>)parsed;
+			if(!"decision_chosen".equals(event.get("eventType")))
+			{
+				continue;
+			}
+
+			Map<String, Object> taskSelection = (Map<String, Object>)event.get("taskSelection");
+			Map<String, Object> resourceSelection = (Map<String, Object>)event.get("resourceSelection");
+			if(taskSelection != null && Boolean.FALSE.equals(taskSelection.get("validSelection")))
+			{
+				invalidTaskActionCount++;
+			}
+			if(resourceSelection != null && Boolean.FALSE.equals(resourceSelection.get("validSelection")))
+			{
+				invalidVmActionCount++;
+			}
+		}
+
+		if(invalidTaskActionCount != 0)
+		{
+			throw new IllegalStateException("invalid task action count mismatch: " + invalidTaskActionCount);
+		}
+		if(invalidVmActionCount != 0)
+		{
+			throw new IllegalStateException("invalid vm action count mismatch: " + invalidVmActionCount);
+		}
+	}
+
+	private static void assertNoDivergence(Path leftRunDir, Path rightRunDir) throws IOException
+	{
+		BaselineDiffAnalyzer analyzer = new BaselineDiffAnalyzer();
+		Map<String, Object> diff = analyzer.analyze(leftRunDir, rightRunDir);
+		if(!"no_divergence".equals(diff.get("status")))
+		{
+			throw new IllegalStateException("Golden trace diverged: " + JsonSupport.toJson(diff));
 		}
 	}
 

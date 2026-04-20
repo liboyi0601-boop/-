@@ -26,6 +26,12 @@ public class TaskStateView
 	private final int leastFinishTime;
 	private final int subDeadline;
 	private final int subSpan;
+	private final int upwardRank;
+	private final int downwardRank;
+	private final int criticalPathSlack;
+	private final int remainingDescendantWorkload;
+	private final int dataTransferPressure;
+	private final int readyDuration;
 	private final boolean pathLastFlag;
 	private final boolean pathFirstFlag;
 	private final String pathFirstTaskId;
@@ -46,10 +52,12 @@ public class TaskStateView
 			int baseStartTime, int baseFinishTime, int realBaseExecutionTime, int realExecutionTime,
 			int executionTimeWithConfidency, int realStartTime, int startTimeWithConfidency, int earliestStartTime,
 			int leastStartTime, int realFinishTime, int finishTimeWithConfidency, int earliestFinishTime,
-			int leastFinishTime, int subDeadline, int subSpan, boolean pathLastFlag, boolean pathFirstFlag,
-			String pathFirstTaskId, String pathLastTaskId, boolean allocatedFlag, int allocatedVmId, boolean finishFlag,
-			boolean newStartVm, int priority, int pcpNum, boolean inGlobalTaskPool, List<String> parentTaskIds,
-			List<Integer> parentDataSizes, List<String> successorTaskIds, List<Integer> successorDataSizes)
+			int leastFinishTime, int subDeadline, int subSpan, int upwardRank, int downwardRank,
+			int criticalPathSlack, int remainingDescendantWorkload, int dataTransferPressure, int readyDuration,
+			boolean pathLastFlag, boolean pathFirstFlag, String pathFirstTaskId, String pathLastTaskId,
+			boolean allocatedFlag, int allocatedVmId, boolean finishFlag, boolean newStartVm, int priority,
+			int pcpNum, boolean inGlobalTaskPool, List<String> parentTaskIds, List<Integer> parentDataSizes,
+			List<String> successorTaskIds, List<Integer> successorDataSizes)
 	{
 		this.taskId = taskId;
 		this.workflowId = workflowId;
@@ -71,6 +79,12 @@ public class TaskStateView
 		this.leastFinishTime = leastFinishTime;
 		this.subDeadline = subDeadline;
 		this.subSpan = subSpan;
+		this.upwardRank = upwardRank;
+		this.downwardRank = downwardRank;
+		this.criticalPathSlack = criticalPathSlack;
+		this.remainingDescendantWorkload = remainingDescendantWorkload;
+		this.dataTransferPressure = dataTransferPressure;
+		this.readyDuration = readyDuration;
 		this.pathLastFlag = pathLastFlag;
 		this.pathFirstFlag = pathFirstFlag;
 		this.pathFirstTaskId = pathFirstTaskId;
@@ -108,6 +122,12 @@ public class TaskStateView
 	public int getLeastFinishTime() { return leastFinishTime; }
 	public int getSubDeadline() { return subDeadline; }
 	public int getSubSpan() { return subSpan; }
+	public int getUpwardRank() { return upwardRank; }
+	public int getDownwardRank() { return downwardRank; }
+	public int getCriticalPathSlack() { return criticalPathSlack; }
+	public int getRemainingDescendantWorkload() { return remainingDescendantWorkload; }
+	public int getDataTransferPressure() { return dataTransferPressure; }
+	public int getReadyDuration() { return readyDuration; }
 	public boolean getPathLastFlag() { return pathLastFlag; }
 	public boolean getPathFirstFlag() { return pathFirstFlag; }
 	public String getPathFirstTaskId() { return pathFirstTaskId; }

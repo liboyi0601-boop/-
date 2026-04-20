@@ -34,21 +34,28 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 		return decisionIndex < snapshotLimit;
 	}
 
-	public void recordDecisionCandidate(int currentTime, List<WTask> readyTasks, List<SaaSVm> candidateVms,
-			int workflowCount, int activeVmCount, int offVmCount, int globalTaskPoolSize) throws IOException
+	public void recordDecisionCandidate(int currentTime, TaskCandidateSet taskSet, TaskActionMask taskMask,
+			List<SaaSVm> candidateVms, int workflowCount, int activeVmCount, int offVmCount, int globalTaskPoolSize)
+			throws IOException
 	{
 		Map<String, Object> event = baseEvent("decision_candidate", currentTime);
-		event.put("readyTaskSet", buildReadyTaskSet(readyTasks));
+		event.put("readyTaskSet", buildReadyTaskSet(taskSet));
+		event.put("taskCandidateSet", buildTaskCandidateSet(taskSet));
+		event.put("taskActionMask", new ArrayList<Boolean>(taskMask.getValidSelections()));
 		event.put("candidateVmSet", buildCandidateVmSet(candidateVms));
 		event.put("summary", buildSummary(workflowCount, activeVmCount, offVmCount, globalTaskPoolSize));
 		JsonSupport.appendJsonLine(writer, event);
 	}
 
-	public void recordDecisionChosen(int currentTime, WTask task, SchedulingAction action, double estimatedCostIncrement,
-			SchedulingState snapshot) throws IOException
+	public void recordDecisionChosen(int currentTime, TaskSelection taskSelection, TaskActionMask taskMask,
+			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection,
+			SchedulingAction action, double estimatedCostIncrement, SchedulingState snapshot) throws IOException
 	{
 		Map<String, Object> event = baseEvent("decision_chosen", currentTime);
-		event.put("task", buildTaskPointer(task));
+		event.put("taskSelection", buildTaskSelection(taskSelection, taskMask));
+		event.put("vmCandidateSet", buildVmCandidateSet(vmSet));
+		event.put("vmActionMask", new ArrayList<Boolean>(vmMask.getValidSelections()));
+		event.put("resourceSelection", buildResourceSelection(resourceSelection, vmMask));
 		event.put("action", buildAction(action));
 		event.put("estimatedCostIncrement", estimatedCostIncrement);
 		if(snapshot != null)
@@ -71,7 +78,7 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 	{
 		Map<String, Object> event = baseEvent("task_finish", currentTime);
 		event.put("finishedTasks", buildFinishedTasks(finishedTasks));
-		event.put("readyTasksAfterFinish", buildReadyTaskSet(readyTasksAfterFinish));
+		event.put("readyTasksAfterFinish", buildReadyTasksFromWTasks(readyTasksAfterFinish));
 		JsonSupport.appendJsonLine(writer, event);
 	}
 
@@ -107,7 +114,12 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 		return summary;
 	}
 
-	private List<Map<String, Object>> buildReadyTaskSet(List<WTask> readyTasks)
+	private List<Map<String, Object>> buildReadyTaskSet(TaskCandidateSet taskSet)
+	{
+		return buildTaskCandidateSet(taskSet);
+	}
+
+	private List<Map<String, Object>> buildReadyTasksFromWTasks(List<WTask> readyTasks)
 	{
 		List<Map<String, Object>> tasks = new ArrayList<Map<String, Object>>();
 		for(WTask task: readyTasks)
@@ -116,7 +128,6 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 			{
 				continue;
 			}
-
 			Map<String, Object> item = new LinkedHashMap<String, Object>();
 			item.put("taskId", task.getTaskId());
 			item.put("workflowId", task.getTaskWorkFlowId());
@@ -125,6 +136,16 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 			item.put("subDeadline", task.getSubDeadLine());
 			item.put("priority", task.getPriority());
 			tasks.add(item);
+		}
+		return tasks;
+	}
+
+	private List<Map<String, Object>> buildTaskCandidateSet(TaskCandidateSet taskSet)
+	{
+		List<Map<String, Object>> tasks = new ArrayList<Map<String, Object>>();
+		for(TaskCandidateView candidate: taskSet.getCandidates())
+		{
+			tasks.add(buildTaskCandidate(candidate));
 		}
 		return tasks;
 	}
@@ -150,15 +171,62 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 		return vms;
 	}
 
-	private Map<String, Object> buildTaskPointer(WTask task)
+	private Map<String, Object> buildTaskCandidate(TaskCandidateView candidate)
 	{
-		Map<String, Object> pointer = new LinkedHashMap<String, Object>();
-		pointer.put("taskId", task.getTaskId());
-		pointer.put("workflowId", task.getTaskWorkFlowId());
-		pointer.put("subDeadline", task.getSubDeadLine());
-		pointer.put("earliestStartTime", task.getEarliestStartTime());
-		pointer.put("earliestFinishTime", task.getEarliestFinishTime());
-		return pointer;
+		Map<String, Object> item = new LinkedHashMap<String, Object>();
+		item.put("candidateIndex", candidate.getCandidateIndex());
+		item.put("taskId", candidate.getTaskId());
+		item.put("workflowId", candidate.getWorkflowId());
+		item.put("earliestStartTime", candidate.getEarliestStartTime());
+		item.put("earliestFinishTime", candidate.getEarliestFinishTime());
+		item.put("subDeadline", candidate.getSubDeadline());
+		item.put("priority", candidate.getPriority());
+		return item;
+	}
+
+	private Map<String, Object> buildTaskSelection(TaskSelection selection, TaskActionMask taskMask)
+	{
+		Map<String, Object> item = new LinkedHashMap<String, Object>();
+		item.put("selectedIndex", selection.getSelectedIndex());
+		item.put("validSelection", taskMask.isValid(selection.getSelectedIndex()));
+		item.put("candidate", buildTaskCandidate(selection.getSelectedCandidate()));
+		return item;
+	}
+
+	private List<Map<String, Object>> buildVmCandidateSet(VmCandidateSet vmSet)
+	{
+		List<Map<String, Object>> candidates = new ArrayList<Map<String, Object>>();
+		for(VmCandidateView candidate: vmSet.getCandidates())
+		{
+			candidates.add(buildVmCandidate(candidate));
+		}
+		return candidates;
+	}
+
+	private Map<String, Object> buildVmCandidate(VmCandidateView candidate)
+	{
+		Map<String, Object> item = new LinkedHashMap<String, Object>();
+		item.put("candidateIndex", candidate.getCandidateIndex());
+		item.put("candidateKind", candidate.getCandidateKind().name());
+		item.put("existingVmId", candidate.getExistingVmId());
+		item.put("existingVmType", candidate.getExistingVmType());
+		item.put("newVmType", candidate.getNewVmType());
+		item.put("realDataArrival", candidate.getRealDataArrival());
+		item.put("estimatedReadyStartTime", candidate.getEstimatedReadyStartTime());
+		item.put("estimatedFinishTimeIfAssigned", candidate.getEstimatedFinishTimeIfAssigned());
+		item.put("estimatedCostIfAssigned", candidate.getEstimatedCostIfAssigned());
+		item.put("idleGapFitScore", candidate.getIdleGapFitScore());
+		item.put("feasibleUnderSubDeadline", candidate.getFeasibleUnderSubDeadline());
+		return item;
+	}
+
+	private Map<String, Object> buildResourceSelection(ResourceSelection selection, VmActionMask vmMask)
+	{
+		Map<String, Object> item = new LinkedHashMap<String, Object>();
+		item.put("selectedIndex", selection.getSelectedIndex());
+		item.put("validSelection", vmMask.isValid(selection.getSelectedIndex()));
+		item.put("candidate", buildVmCandidate(selection.getSelectedCandidate()));
+		return item;
 	}
 
 	private Map<String, Object> buildAction(SchedulingAction action)
@@ -284,6 +352,10 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 			item.put("taskCount", workflow.getTaskCount());
 			item.put("allocatedTaskCount", workflow.getAllocatedTaskCount());
 			item.put("finishedTaskCount", workflow.getFinishedTaskCount());
+			item.put("normalizedSlack", workflow.getNormalizedSlack());
+			item.put("violationRiskScore", workflow.getViolationRiskScore());
+			item.put("readyTaskDensity", workflow.getReadyTaskDensity());
+			item.put("remainingCriticalPathLength", workflow.getRemainingCriticalPathLength());
 			item.put("taskIds", new ArrayList<String>(workflow.getTaskIds()));
 			workflows.add(item);
 		}
@@ -316,6 +388,12 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 			item.put("leastFinishTime", task.getLeastFinishTime());
 			item.put("subDeadline", task.getSubDeadline());
 			item.put("subSpan", task.getSubSpan());
+			item.put("upwardRank", task.getUpwardRank());
+			item.put("downwardRank", task.getDownwardRank());
+			item.put("criticalPathSlack", task.getCriticalPathSlack());
+			item.put("remainingDescendantWorkload", task.getRemainingDescendantWorkload());
+			item.put("dataTransferPressure", task.getDataTransferPressure());
+			item.put("readyDuration", task.getReadyDuration());
 			item.put("pathLastFlag", task.getPathLastFlag());
 			item.put("pathFirstFlag", task.getPathFirstFlag());
 			item.put("pathFirstTaskId", task.getPathFirstTaskId());
@@ -355,6 +433,10 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 			item.put("readyTime", vm.getReadyTime());
 			item.put("vmStatus", vm.getVmStatus());
 			item.put("totalCost", vm.getTotalCost());
+			item.put("unitCost", vm.getUnitCost());
+			item.put("billingResidual", vm.getBillingResidual());
+			item.put("slotRemaining", vm.getSlotRemaining());
+			item.put("idleNow", vm.getIdleNow());
 			item.put("executingTaskId", vm.getExecutingTaskId());
 			item.put("waitingTaskId", vm.getWaitingTaskId());
 			item.put("completedTaskIds", new ArrayList<String>(vm.getCompletedTaskIds()));

@@ -18,13 +18,15 @@ public final class NoOpSchedulingTraceRecorder implements SchedulingTraceRecorde
 		return false;
 	}
 
-	public void recordDecisionCandidate(int currentTime, List<WTask> readyTasks, List<SaaSVm> candidateVms,
+	public void recordDecisionCandidate(int currentTime, TaskCandidateSet taskSet, TaskActionMask taskMask,
+			List<SaaSVm> candidateVms,
 			int workflowCount, int activeVmCount, int offVmCount, int globalTaskPoolSize) throws IOException
 	{
 	}
 
-	public void recordDecisionChosen(int currentTime, WTask task, SchedulingAction action, double estimatedCostIncrement,
-			SchedulingState snapshot) throws IOException
+	public void recordDecisionChosen(int currentTime, TaskSelection taskSelection, TaskActionMask taskMask,
+			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection,
+			SchedulingAction action, double estimatedCostIncrement, SchedulingState snapshot) throws IOException
 	{
 	}
 
