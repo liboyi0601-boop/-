@@ -18,6 +18,7 @@ public interface SchedulingTraceRecorder extends Closeable
 			int workflowCount, int activeVmCount, int offVmCount, int globalTaskPoolSize) throws IOException;
 
 	void recordDecisionChosen(int currentTime, TaskSelection taskSelection, TaskActionMask taskMask,
+			TaskCandidateSet taskSet,
 			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection,
 			SchedulingAction action, double estimatedCostIncrement, SchedulingState snapshot) throws IOException;
 

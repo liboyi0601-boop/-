@@ -36,17 +36,23 @@ public class NOSF_Algorithms
 
 	public NOSF_Algorithms() throws Exception
 	{
-		this(new NoOpSchedulingTraceRecorder());
+		this(new NoOpSchedulingTraceRecorder(), null, null);
 	}
 
 	public NOSF_Algorithms(SchedulingTraceRecorder traceRecorder) throws Exception
 	{
-		this.traceRecorder = traceRecorder;
-		this.env = new WorkflowSchedulingEnv(traceRecorder); //初始化运行环境
+		this(traceRecorder, null, null);
+	}
+
+	public NOSF_Algorithms(SchedulingTraceRecorder traceRecorder, SchedulingPolicy baselinePolicy,
+			HierarchicalSchedulingPolicy hierarchicalPolicy) throws Exception
+	{
+		this.traceRecorder = traceRecorder == null ? new NoOpSchedulingTraceRecorder() : traceRecorder;
+		this.env = new WorkflowSchedulingEnv(this.traceRecorder); //初始化运行环境
 		this.preprocessor = new NosfPreprocessor();
 		this.nosfBaselinePolicy = new NosfBaselinePolicy();
-		this.baselinePolicy = nosfBaselinePolicy;
-		this.hierarchicalPolicy = nosfBaselinePolicy;
+		this.baselinePolicy = resolveBaselinePolicy(baselinePolicy);
+		this.hierarchicalPolicy = resolveHierarchicalPolicy(hierarchicalPolicy, this.baselinePolicy);
 		this.stateBuilder = new StateBuilder();
 		this.taskCandidateSetBuilder = new CandidateTaskSetBuilder();
 		this.candidateVmSetBuilder = new CandidateVmSetBuilder();
@@ -430,7 +436,7 @@ public class NOSF_Algorithms
 			ResourceSelection resourceSelection = hierarchicalPolicy.selectResource(
 					taskSelection.getSelectedCandidate(), vmSet, state);
 			SchedulingAction action = resourceSelection.toSchedulingAction(taskSelection.getSelectedCandidate().getTask());
-			recordDecisionChosen(taskSelection, taskMask, vmSet, vmMask, resourceSelection, action);
+			recordDecisionChosen(taskSelection, taskMask, taskSet, vmSet, vmMask, resourceSelection, action);
 			env.applyAction(action);
 		}
 			
@@ -438,7 +444,9 @@ public class NOSF_Algorithms
 
 	private boolean useBaselineFastPath()
 	{
-		return !traceRecorder.isEnabled();
+		return !traceRecorder.isEnabled()
+				&& baselinePolicy == nosfBaselinePolicy
+				&& hierarchicalPolicy == nosfBaselinePolicy;
 	}
 
 	private void scheduleReadyTaskToVmFast(List<WTask> taskList, List<SaaSVm> vmList)
@@ -658,7 +666,8 @@ public class NOSF_Algorithms
 	}
 
 	private void recordDecisionChosen(TaskSelection taskSelection, TaskActionMask taskMask,
-			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection, SchedulingAction action)
+			TaskCandidateSet taskSet, VmCandidateSet vmSet, VmActionMask vmMask,
+			ResourceSelection resourceSelection, SchedulingAction action)
 	{
 		if(!traceRecorder.isEnabled())
 		{
@@ -677,6 +686,7 @@ public class NOSF_Algorithms
 					StaticfinalTags.currentTime,
 					taskSelection,
 					taskMask,
+					taskSet,
 					vmSet,
 					vmMask,
 					resourceSelection,
@@ -731,6 +741,29 @@ public class NOSF_Algorithms
 			return (task1.getEarliestFinishTime() - task2.getEarliestFinishTime());
 		}
 
+	}
+
+	private SchedulingPolicy resolveBaselinePolicy(SchedulingPolicy baselinePolicy)
+	{
+		if(baselinePolicy == null)
+		{
+			return nosfBaselinePolicy;
+		}
+		return baselinePolicy;
+	}
+
+	private HierarchicalSchedulingPolicy resolveHierarchicalPolicy(HierarchicalSchedulingPolicy hierarchicalPolicy,
+			SchedulingPolicy baselinePolicy)
+	{
+		if(hierarchicalPolicy != null)
+		{
+			return hierarchicalPolicy;
+		}
+		if(baselinePolicy instanceof HierarchicalSchedulingPolicy)
+		{
+			return (HierarchicalSchedulingPolicy)baselinePolicy;
+		}
+		return nosfBaselinePolicy;
 	}
 
 }

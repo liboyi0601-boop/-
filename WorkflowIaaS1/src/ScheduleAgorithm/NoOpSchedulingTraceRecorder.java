@@ -25,6 +25,7 @@ public final class NoOpSchedulingTraceRecorder implements SchedulingTraceRecorde
 	}
 
 	public void recordDecisionChosen(int currentTime, TaskSelection taskSelection, TaskActionMask taskMask,
+			TaskCandidateSet taskSet,
 			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection,
 			SchedulingAction action, double estimatedCostIncrement, SchedulingState snapshot) throws IOException
 	{

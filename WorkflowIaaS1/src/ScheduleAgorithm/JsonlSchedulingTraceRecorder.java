@@ -48,10 +48,12 @@ public final class JsonlSchedulingTraceRecorder implements SchedulingTraceRecord
 	}
 
 	public void recordDecisionChosen(int currentTime, TaskSelection taskSelection, TaskActionMask taskMask,
+			TaskCandidateSet taskSet,
 			VmCandidateSet vmSet, VmActionMask vmMask, ResourceSelection resourceSelection,
 			SchedulingAction action, double estimatedCostIncrement, SchedulingState snapshot) throws IOException
 	{
 		Map<String, Object> event = baseEvent("decision_chosen", currentTime);
+		event.put("taskCandidateSet", buildTaskCandidateSet(taskSet));
 		event.put("taskSelection", buildTaskSelection(taskSelection, taskMask));
 		event.put("vmCandidateSet", buildVmCandidateSet(vmSet));
 		event.put("vmActionMask", new ArrayList<Boolean>(vmMask.getValidSelections()));
