@@ -14,6 +14,8 @@ public final class AblationPolicyFactory
 	public static final String PHASE9_GRAPH_PLUS_VM_ATTENTION = "phase9_graph_plus_vm_attention";
 	public static final String PHASE9_GRAPH_PLUS_MLP_VM = "phase9_graph_plus_mlp_vm";
 	public static final String PHASE9_MLP_TASK_PLUS_VM_ATTENTION = "phase9_mlp_task_plus_vm_attention";
+	public static final String PHASE10B_GRAPH_PLUS_VM_TRANSFORMER = "phase10b_graph_plus_vm_transformer";
+	public static final String PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER = "phase10b_mlp_task_plus_vm_transformer";
 	public static final String RANDOM_POLICY = "random_policy";
 	public static final String HEURISTIC_RERANK = "heuristic_rerank";
 
@@ -38,6 +40,8 @@ public final class AblationPolicyFactory
 				PHASE9_GRAPH_PLUS_VM_ATTENTION,
 				PHASE9_GRAPH_PLUS_MLP_VM,
 				PHASE9_MLP_TASK_PLUS_VM_ATTENTION,
+				PHASE10B_GRAPH_PLUS_VM_TRANSFORMER,
+				PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER,
 				RANDOM_POLICY,
 				HEURISTIC_RERANK);
 	}
@@ -80,7 +84,7 @@ public final class AblationPolicyFactory
 		if(PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName))
 		{
 			HybridWarmStartTrainer trainer = new HybridWarmStartTrainer(
-					true, false, options.graphHiddenSize, options.taskHiddenSize, options.vmHiddenSize,
+					true, false, false, options.graphHiddenSize, options.taskHiddenSize, options.vmHiddenSize,
 					options.graphLayers, options.epochs, options.learningRate, options.l2,
 					options.epsilon, options.seed);
 			return trainer.train(variantName, flatReplay, contextualReplay, epochListener);
@@ -89,7 +93,25 @@ public final class AblationPolicyFactory
 		if(PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName))
 		{
 			HybridWarmStartTrainer trainer = new HybridWarmStartTrainer(
-					false, true, options.graphHiddenSize, options.taskHiddenSize, options.vmHiddenSize,
+					false, true, false, options.graphHiddenSize, options.taskHiddenSize, options.vmHiddenSize,
+					options.graphLayers, options.epochs, options.learningRate, options.l2,
+					options.epsilon, options.seed);
+			return trainer.train(variantName, flatReplay, contextualReplay, epochListener);
+		}
+
+		if(PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName))
+		{
+			HybridWarmStartTrainer trainer = new HybridWarmStartTrainer(
+					true, false, true, options.graphHiddenSize, options.taskHiddenSize, options.vmHiddenSize,
+					options.graphLayers, options.epochs, options.learningRate, options.l2,
+					options.epsilon, options.seed);
+			return trainer.train(variantName, flatReplay, contextualReplay, epochListener);
+		}
+
+		if(PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName))
+		{
+			HybridWarmStartTrainer trainer = new HybridWarmStartTrainer(
+					false, false, true, options.graphHiddenSize, options.taskHiddenSize, options.vmHiddenSize,
 					options.graphLayers, options.epochs, options.learningRate, options.l2,
 					options.epsilon, options.seed);
 			return trainer.train(variantName, flatReplay, contextualReplay, epochListener);
@@ -195,6 +217,7 @@ public final class AblationPolicyFactory
 	{
 		private final boolean useGraphTask;
 		private final boolean useVmAttention;
+		private final boolean useVmTransformer;
 		private final int graphHiddenSize;
 		private final int taskHiddenSize;
 		private final int vmHiddenSize;
@@ -205,12 +228,14 @@ public final class AblationPolicyFactory
 		private final double epsilon;
 		private final long seed;
 
-		private HybridWarmStartTrainer(boolean useGraphTask, boolean useVmAttention, int graphHiddenSize,
+		private HybridWarmStartTrainer(boolean useGraphTask, boolean useVmAttention, boolean useVmTransformer,
+				int graphHiddenSize,
 				int taskHiddenSize, int vmHiddenSize, int graphLayers, int epochs, double learningRate, double l2,
 				double epsilon, long seed)
 		{
 			this.useGraphTask = useGraphTask;
 			this.useVmAttention = useVmAttention;
+			this.useVmTransformer = useVmTransformer;
 			this.graphHiddenSize = graphHiddenSize;
 			this.taskHiddenSize = taskHiddenSize;
 			this.vmHiddenSize = vmHiddenSize;
@@ -231,11 +256,15 @@ public final class AblationPolicyFactory
 			GraphAttentionVmNetwork vmNetwork = useVmAttention
 					? new GraphAttentionVmNetwork(graphHiddenSize, vmHiddenSize, graphLayers, seed + 1000L)
 					: null;
+			VmTransformerLiteNetwork vmTransformerNetwork = useVmTransformer
+					? new VmTransformerLiteNetwork(graphHiddenSize, vmHiddenSize, vmHiddenSize * 2,
+							graphLayers, seed + 2000L)
+					: null;
 			SimpleTwoLayerScorer taskScorer = useGraphTask
 					? null
 					: new SimpleTwoLayerScorer(flatReplay.getTaskExamples().get(0).getFeatureSize(),
 							taskHiddenSize, new Random(seed));
-			SimpleTwoLayerScorer vmScorer = useVmAttention
+			SimpleTwoLayerScorer vmScorer = (useVmAttention || useVmTransformer)
 					? null
 					: new SimpleTwoLayerScorer(flatReplay.getVmExamples().get(0).getFeatureSize(),
 							vmHiddenSize, new Random(seed + 1L));
@@ -245,7 +274,7 @@ public final class AblationPolicyFactory
 			for(int epoch = 0; epoch < epochs; epoch++)
 			{
 				lastTaskLoss = trainTask(taskNetwork, taskScorer, flatReplay, contextualReplay);
-				lastVmLoss = trainVm(vmNetwork, vmScorer, flatReplay, contextualReplay);
+				lastVmLoss = trainVm(vmNetwork, vmTransformerNetwork, vmScorer, flatReplay, contextualReplay);
 
 				if(epochListener != null)
 				{
@@ -255,13 +284,13 @@ public final class AblationPolicyFactory
 					epochMetrics.put("taskChosenActionAccuracy",
 							computeTaskAccuracy(taskNetwork, taskScorer, flatReplay, contextualReplay));
 					epochMetrics.put("vmChosenActionAccuracy",
-							computeVmAccuracy(vmNetwork, vmScorer, flatReplay, contextualReplay));
+							computeVmAccuracy(vmNetwork, vmTransformerNetwork, vmScorer, flatReplay, contextualReplay));
 					epochMetrics.put("taskMaskHitRate",
 							computeTaskMaskHitRate(taskNetwork, taskScorer, flatReplay, contextualReplay));
 					epochMetrics.put("vmMaskHitRate",
-							computeVmMaskHitRate(vmNetwork, vmScorer, flatReplay, contextualReplay));
+							computeVmMaskHitRate(vmNetwork, vmTransformerNetwork, vmScorer, flatReplay, contextualReplay));
 					epochListener.onEpoch(epoch, epochMetrics, null,
-							new HybridHierarchicalPolicy(taskNetwork, taskScorer, vmNetwork, vmScorer,
+							new HybridHierarchicalPolicy(taskNetwork, taskScorer, vmNetwork, vmTransformerNetwork, vmScorer,
 									epsilon, seed + 2000L));
 				}
 			}
@@ -274,19 +303,42 @@ public final class AblationPolicyFactory
 			summary.put("taskHiddenSize", taskHiddenSize);
 			summary.put("graphHiddenSize", graphHiddenSize);
 			summary.put("vmHiddenSize", vmHiddenSize);
+			summary.put("vmTransformerHiddenSize", useVmTransformer ? vmHiddenSize : 0);
 			summary.put("graphLayers", graphLayers);
 			summary.put("epsilon", epsilon);
 			summary.put("seed", seed);
 			summary.put("taskModel", useGraphTask ? "graph" : "mlp");
-			summary.put("vmModel", useVmAttention ? "vm_attention" : "mlp");
+			summary.put("vmModel", resolveVmModel());
+			summary.put("attentionHeads", Integer.valueOf(useVmTransformer
+					? VmTransformerLiteEncoder.ATTENTION_HEADS : (useVmAttention ? 1 : 0)));
+			summary.put("transformerLayers", Integer.valueOf(useVmTransformer
+					? VmTransformerLiteEncoder.TRANSFORMER_LAYERS : 0));
+			summary.put("ffnHiddenSize", Integer.valueOf(useVmTransformer
+					? vmTransformerNetwork.getFfnHiddenSize() : 0));
+			summary.put("normalizationType", useVmTransformer
+					? VmTransformerLiteEncoder.NORMALIZATION_TYPE : "none");
 			summary.put("finalTaskLoss", lastTaskLoss);
 			summary.put("finalVmLoss", lastVmLoss);
 
+			String algorithmName;
+			if(useVmTransformer)
+			{
+				algorithmName = useGraphTask
+						? "PHASE10B_GRAPH_PLUS_VM_TRANSFORMER"
+						: "PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER";
+			}
+			else
+			{
+				algorithmName = useGraphTask
+						? "PHASE10A_GRAPH_TASK_HYBRID"
+						: "PHASE10A_MLP_TASK_HYBRID";
+			}
+
 			return new VariantTrainingResult(variantName,
-					useGraphTask ? "PHASE10A_GRAPH_TASK_HYBRID" : "PHASE10A_MLP_TASK_HYBRID",
+					algorithmName,
 					summary,
 					null,
-					new HybridHierarchicalPolicy(taskNetwork, taskScorer, vmNetwork, vmScorer,
+					new HybridHierarchicalPolicy(taskNetwork, taskScorer, vmNetwork, vmTransformerNetwork, vmScorer,
 							epsilon, seed + 2000L));
 		}
 
@@ -310,7 +362,21 @@ public final class AblationPolicyFactory
 			return lossSum / flatReplay.getTaskExamples().size();
 		}
 
-		private double trainVm(GraphAttentionVmNetwork vmNetwork, SimpleTwoLayerScorer vmScorer,
+		private String resolveVmModel()
+		{
+			if(useVmTransformer)
+			{
+				return "vm_transformer_lite";
+			}
+			if(useVmAttention)
+			{
+				return "vm_attention";
+			}
+			return "mlp";
+		}
+
+		private double trainVm(GraphAttentionVmNetwork vmNetwork, VmTransformerLiteNetwork vmTransformerNetwork,
+				SimpleTwoLayerScorer vmScorer,
 				HierarchicalReplayBuffer flatReplay, ContextualHierarchicalReplayBuffer contextualReplay)
 		{
 			double lossSum = 0.0;
@@ -319,6 +385,15 @@ public final class AblationPolicyFactory
 				for(VmDecisionContextExample example: contextualReplay.getVmExamples())
 				{
 					lossSum += vmNetwork.trainOnExample(example, learningRate, l2);
+				}
+				return lossSum / contextualReplay.getVmExamples().size();
+			}
+
+			if(useVmTransformer)
+			{
+				for(VmDecisionContextExample example: contextualReplay.getVmExamples())
+				{
+					lossSum += vmTransformerNetwork.trainOnExample(example, learningRate, l2);
 				}
 				return lossSum / contextualReplay.getVmExamples().size();
 			}
@@ -358,16 +433,28 @@ public final class AblationPolicyFactory
 			return (double)correctCount / total;
 		}
 
-		private double computeVmAccuracy(GraphAttentionVmNetwork vmNetwork, SimpleTwoLayerScorer vmScorer,
+		private double computeVmAccuracy(GraphAttentionVmNetwork vmNetwork, VmTransformerLiteNetwork vmTransformerNetwork,
+				SimpleTwoLayerScorer vmScorer,
 				HierarchicalReplayBuffer flatReplay, ContextualHierarchicalReplayBuffer contextualReplay)
 		{
 			int correctCount = 0;
-			int total = useVmAttention ? contextualReplay.getVmExamples().size() : flatReplay.getVmExamples().size();
+			int total = (useVmAttention || useVmTransformer)
+					? contextualReplay.getVmExamples().size() : flatReplay.getVmExamples().size();
 			if(useVmAttention)
 			{
 				for(VmDecisionContextExample example: contextualReplay.getVmExamples())
 				{
 					if(vmNetwork.selectIndex(example) == example.getChosenVmIndex())
+					{
+						correctCount++;
+					}
+				}
+			}
+			else if(useVmTransformer)
+			{
+				for(VmDecisionContextExample example: contextualReplay.getVmExamples())
+				{
+					if(vmTransformerNetwork.selectIndex(example) == example.getChosenVmIndex())
 					{
 						correctCount++;
 					}
@@ -414,16 +501,28 @@ public final class AblationPolicyFactory
 			return (double)validCount / total;
 		}
 
-		private double computeVmMaskHitRate(GraphAttentionVmNetwork vmNetwork, SimpleTwoLayerScorer vmScorer,
+		private double computeVmMaskHitRate(GraphAttentionVmNetwork vmNetwork, VmTransformerLiteNetwork vmTransformerNetwork,
+				SimpleTwoLayerScorer vmScorer,
 				HierarchicalReplayBuffer flatReplay, ContextualHierarchicalReplayBuffer contextualReplay)
 		{
 			int validCount = 0;
-			int total = useVmAttention ? contextualReplay.getVmExamples().size() : flatReplay.getVmExamples().size();
+			int total = (useVmAttention || useVmTransformer)
+					? contextualReplay.getVmExamples().size() : flatReplay.getVmExamples().size();
 			if(useVmAttention)
 			{
 				for(VmDecisionContextExample example: contextualReplay.getVmExamples())
 				{
 					if(example.getVmMask().isValid(vmNetwork.selectIndex(example)))
+					{
+						validCount++;
+					}
+				}
+			}
+			else if(useVmTransformer)
+			{
+				for(VmDecisionContextExample example: contextualReplay.getVmExamples())
+				{
+					if(example.getVmMask().isValid(vmTransformerNetwork.selectIndex(example)))
 					{
 						validCount++;
 					}
@@ -451,12 +550,14 @@ public final class AblationPolicyFactory
 		private final GraphAttentionTaskNetwork graphTaskNetwork;
 		private final SimpleTwoLayerScorer taskScorer;
 		private final GraphAttentionVmNetwork vmNetwork;
+		private final VmTransformerLiteNetwork vmTransformerNetwork;
 		private final SimpleTwoLayerScorer vmScorer;
 		private final double epsilon;
 		private final Random random;
 
 		private HybridHierarchicalPolicy(GraphAttentionTaskNetwork graphTaskNetwork, SimpleTwoLayerScorer taskScorer,
-				GraphAttentionVmNetwork vmNetwork, SimpleTwoLayerScorer vmScorer, double epsilon, long seed)
+				GraphAttentionVmNetwork vmNetwork, VmTransformerLiteNetwork vmTransformerNetwork,
+				SimpleTwoLayerScorer vmScorer, double epsilon, long seed)
 		{
 			this.compatibilityPolicy = new NosfBaselinePolicy();
 			this.taskFeatureExtractor = new TaskFeatureExtractor();
@@ -464,6 +565,7 @@ public final class AblationPolicyFactory
 			this.graphTaskNetwork = graphTaskNetwork;
 			this.taskScorer = taskScorer;
 			this.vmNetwork = vmNetwork;
+			this.vmTransformerNetwork = vmTransformerNetwork;
 			this.vmScorer = vmScorer;
 			this.epsilon = epsilon;
 			this.random = new Random(seed);
@@ -504,6 +606,10 @@ public final class AblationPolicyFactory
 			if(vmNetwork != null)
 			{
 				selectedIndex = vmNetwork.selectIndex(selectedTask, vmSet, state, validMask, epsilon, random);
+			}
+			else if(vmTransformerNetwork != null)
+			{
+				selectedIndex = vmTransformerNetwork.selectIndex(selectedTask, vmSet, state, validMask, epsilon, random);
 			}
 			else
 			{
