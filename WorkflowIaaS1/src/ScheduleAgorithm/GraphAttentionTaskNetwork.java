@@ -25,6 +25,12 @@ public final class GraphAttentionTaskNetwork
 				example.getTaskMask().getValidSelections(), example.getChosenTaskIndex(), learningRate, l2);
 	}
 
+	public int selectIndex(TaskDecisionContextExample example)
+	{
+		return selectIndex(example.getTaskSet(), example.getState(), buildValidMask(example),
+				0.0, new Random(0L));
+	}
+
 	public int selectIndex(TaskCandidateSet taskSet, SchedulingState state, boolean[] validMask, double epsilon,
 			Random random)
 	{
@@ -73,6 +79,16 @@ public final class GraphAttentionTaskNetwork
 		}
 
 		return new TaskForwardPass(candidateEmbeddings, pooledEmbeddings, logits);
+	}
+
+	private boolean[] buildValidMask(TaskDecisionContextExample example)
+	{
+		boolean[] validMask = new boolean[example.getTaskSet().size()];
+		for(int index = 0; index < validMask.length; index++)
+		{
+			validMask[index] = example.getTaskMask().isValid(index);
+		}
+		return validMask;
 	}
 
 	private WorkflowGraphEncoding getEncoding(Map<Integer, WorkflowGraphEncoding> encodings, SchedulingState state,

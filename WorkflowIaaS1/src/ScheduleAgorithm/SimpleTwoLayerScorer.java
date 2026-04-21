@@ -33,6 +33,33 @@ public final class SimpleTwoLayerScorer
 		return score;
 	}
 
+	public int selectIndex(MaskedDecisionExample example)
+	{
+		if(example.size() == 0)
+		{
+			return 0;
+		}
+
+		int bestIndex = -1;
+		double bestScore = Double.NEGATIVE_INFINITY;
+		for(int candidateIndex = 0; candidateIndex < example.size(); candidateIndex++)
+		{
+			if(!example.isValid(candidateIndex))
+			{
+				continue;
+			}
+
+			double score = score(example.getCandidateFeatures(candidateIndex));
+			if(bestIndex == -1 || score > bestScore)
+			{
+				bestIndex = candidateIndex;
+				bestScore = score;
+			}
+		}
+
+		return bestIndex == -1 ? 0 : bestIndex;
+	}
+
 	public double trainOnExample(MaskedDecisionExample example, double learningRate, double l2)
 	{
 		if(example.size() == 0)

@@ -28,6 +28,11 @@ public final class OfflineWarmStartTrainer
 
 	public OfflineWarmStartResult train(HierarchicalReplayBuffer replayBuffer)
 	{
+		return train(replayBuffer, null);
+	}
+
+	public OfflineWarmStartResult train(HierarchicalReplayBuffer replayBuffer, EpochTrainingListener epochListener)
+	{
 		if(replayBuffer.getTaskExamples().isEmpty() || replayBuffer.getVmExamples().isEmpty())
 		{
 			throw new IllegalStateException("Replay buffer is empty");
@@ -56,6 +61,20 @@ public final class OfflineWarmStartTrainer
 
 			lastTaskLoss = taskLossSum / replayBuffer.getTaskExamples().size();
 			lastVmLoss = vmLossSum / replayBuffer.getVmExamples().size();
+
+			if(epochListener != null)
+			{
+				Map<String, Object> epochMetrics = new LinkedHashMap<String, Object>();
+				epochMetrics.put("taskLoss", lastTaskLoss);
+				epochMetrics.put("vmLoss", lastVmLoss);
+				epochMetrics.put("taskChosenActionAccuracy", computeAccuracy(taskScorer, replayBuffer.getTaskExamples()));
+				epochMetrics.put("vmChosenActionAccuracy", computeAccuracy(vmScorer, replayBuffer.getVmExamples()));
+				epochMetrics.put("taskMaskHitRate", computeMaskHitRate(taskScorer, replayBuffer.getTaskExamples()));
+				epochMetrics.put("vmMaskHitRate", computeMaskHitRate(vmScorer, replayBuffer.getVmExamples()));
+				HierarchicalMaskedLearningPolicy currentPolicy = new HierarchicalMaskedLearningPolicy(
+						taskScorer, vmScorer, epsilon, seed + 2L);
+				epochListener.onEpoch(epoch, epochMetrics, currentPolicy, currentPolicy);
+			}
 		}
 
 		Map<String, Object> summary = new LinkedHashMap<String, Object>();
@@ -73,5 +92,41 @@ public final class OfflineWarmStartTrainer
 		return new OfflineWarmStartResult(
 				new HierarchicalMaskedLearningPolicy(taskScorer, vmScorer, epsilon, seed + 2L),
 				summary);
+	}
+
+	private double computeAccuracy(SimpleTwoLayerScorer scorer, java.util.List<MaskedDecisionExample> examples)
+	{
+		if(examples.isEmpty())
+		{
+			return 0.0;
+		}
+
+		int correctCount = 0;
+		for(MaskedDecisionExample example: examples)
+		{
+			if(scorer.selectIndex(example) == example.getChosenIndex())
+			{
+				correctCount++;
+			}
+		}
+		return (double)correctCount / examples.size();
+	}
+
+	private double computeMaskHitRate(SimpleTwoLayerScorer scorer, java.util.List<MaskedDecisionExample> examples)
+	{
+		if(examples.isEmpty())
+		{
+			return 0.0;
+		}
+
+		int validCount = 0;
+		for(MaskedDecisionExample example: examples)
+		{
+			if(example.isValid(scorer.selectIndex(example)))
+			{
+				validCount++;
+			}
+		}
+		return (double)validCount / examples.size();
 	}
 }

@@ -29,6 +29,12 @@ public final class GraphAttentionWarmStartTrainer
 
 	public GraphAttentionWarmStartResult train(ContextualHierarchicalReplayBuffer replayBuffer)
 	{
+		return train(replayBuffer, null);
+	}
+
+	public GraphAttentionWarmStartResult train(ContextualHierarchicalReplayBuffer replayBuffer,
+			EpochTrainingListener epochListener)
+	{
 		if(replayBuffer.getTaskExamples().isEmpty() || replayBuffer.getVmExamples().isEmpty())
 		{
 			throw new IllegalStateException("Contextual replay buffer is empty");
@@ -56,6 +62,23 @@ public final class GraphAttentionWarmStartTrainer
 
 			lastTaskLoss = taskLossSum / replayBuffer.getTaskExamples().size();
 			lastVmLoss = vmLossSum / replayBuffer.getVmExamples().size();
+
+			if(epochListener != null)
+			{
+				Map<String, Object> epochMetrics = new LinkedHashMap<String, Object>();
+				epochMetrics.put("taskLoss", lastTaskLoss);
+				epochMetrics.put("vmLoss", lastVmLoss);
+				epochMetrics.put("taskChosenActionAccuracy",
+						computeTaskAccuracy(taskNetwork, replayBuffer));
+				epochMetrics.put("vmChosenActionAccuracy",
+						computeVmAccuracy(vmNetwork, replayBuffer));
+				epochMetrics.put("taskMaskHitRate",
+						computeTaskMaskHitRate(taskNetwork, replayBuffer));
+				epochMetrics.put("vmMaskHitRate",
+						computeVmMaskHitRate(vmNetwork, replayBuffer));
+				epochListener.onEpoch(epoch, epochMetrics, null,
+						new GraphAttentionHierarchicalPolicy(taskNetwork, vmNetwork, epsilon, seed + 2000L));
+			}
 		}
 
 		Map<String, Object> summary = new LinkedHashMap<String, Object>();
@@ -75,5 +98,61 @@ public final class GraphAttentionWarmStartTrainer
 		GraphAttentionHierarchicalPolicy policy = new GraphAttentionHierarchicalPolicy(
 				taskNetwork, vmNetwork, epsilon, seed + 2000L);
 		return new GraphAttentionWarmStartResult(policy, summary);
+	}
+
+	private double computeTaskAccuracy(GraphAttentionTaskNetwork taskNetwork,
+			ContextualHierarchicalReplayBuffer replayBuffer)
+	{
+		int correctCount = 0;
+		for(TaskDecisionContextExample example: replayBuffer.getTaskExamples())
+		{
+			if(taskNetwork.selectIndex(example) == example.getChosenTaskIndex())
+			{
+				correctCount++;
+			}
+		}
+		return (double)correctCount / replayBuffer.getTaskExamples().size();
+	}
+
+	private double computeVmAccuracy(GraphAttentionVmNetwork vmNetwork,
+			ContextualHierarchicalReplayBuffer replayBuffer)
+	{
+		int correctCount = 0;
+		for(VmDecisionContextExample example: replayBuffer.getVmExamples())
+		{
+			if(vmNetwork.selectIndex(example) == example.getChosenVmIndex())
+			{
+				correctCount++;
+			}
+		}
+		return (double)correctCount / replayBuffer.getVmExamples().size();
+	}
+
+	private double computeTaskMaskHitRate(GraphAttentionTaskNetwork taskNetwork,
+			ContextualHierarchicalReplayBuffer replayBuffer)
+	{
+		int validCount = 0;
+		for(TaskDecisionContextExample example: replayBuffer.getTaskExamples())
+		{
+			if(example.getTaskMask().isValid(taskNetwork.selectIndex(example)))
+			{
+				validCount++;
+			}
+		}
+		return (double)validCount / replayBuffer.getTaskExamples().size();
+	}
+
+	private double computeVmMaskHitRate(GraphAttentionVmNetwork vmNetwork,
+			ContextualHierarchicalReplayBuffer replayBuffer)
+	{
+		int validCount = 0;
+		for(VmDecisionContextExample example: replayBuffer.getVmExamples())
+		{
+			if(example.getVmMask().isValid(vmNetwork.selectIndex(example)))
+			{
+				validCount++;
+			}
+		}
+		return (double)validCount / replayBuffer.getVmExamples().size();
 	}
 }

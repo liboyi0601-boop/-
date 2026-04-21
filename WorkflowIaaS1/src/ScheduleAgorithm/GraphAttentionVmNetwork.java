@@ -29,6 +29,12 @@ public final class GraphAttentionVmNetwork
 				example.getVmMask().getValidSelections(), example.getChosenVmIndex(), learningRate, l2);
 	}
 
+	public int selectIndex(VmDecisionContextExample example)
+	{
+		return selectIndex(example.getSelectedTask(), example.getVmSet(), example.getState(),
+				buildValidMask(example), 0.0, new Random(0L));
+	}
+
 	public int selectIndex(TaskCandidateView selectedTask, VmCandidateSet vmSet, SchedulingState state,
 			boolean[] validMask, double epsilon, Random random)
 	{
@@ -79,6 +85,16 @@ public final class GraphAttentionVmNetwork
 		}
 
 		return new VmForwardPass(candidateEmbeddings, attentionEncoding.getQueryEmbedding(), logits);
+	}
+
+	private boolean[] buildValidMask(VmDecisionContextExample example)
+	{
+		boolean[] validMask = new boolean[example.getVmSet().size()];
+		for(int index = 0; index < validMask.length; index++)
+		{
+			validMask[index] = example.getVmMask().isValid(index);
+		}
+		return validMask;
 	}
 
 	private boolean hasNoValidIndex(boolean[] validMask)
