@@ -6,14 +6,22 @@ public final class TaskDecisionContextExample
 	private final TaskCandidateSet taskSet;
 	private final TaskActionMask taskMask;
 	private final int chosenTaskIndex;
+	private final ReplayExampleOrigin origin;
 
 	public TaskDecisionContextExample(SchedulingState state, TaskCandidateSet taskSet, TaskActionMask taskMask,
 			int chosenTaskIndex)
+	{
+		this(state, taskSet, taskMask, chosenTaskIndex, null);
+	}
+
+	public TaskDecisionContextExample(SchedulingState state, TaskCandidateSet taskSet, TaskActionMask taskMask,
+			int chosenTaskIndex, ReplayExampleOrigin origin)
 	{
 		this.state = state;
 		this.taskSet = taskSet;
 		this.taskMask = taskMask;
 		this.chosenTaskIndex = chosenTaskIndex;
+		this.origin = origin;
 	}
 
 	public SchedulingState getState()
@@ -34,5 +42,10 @@ public final class TaskDecisionContextExample
 	public int getChosenTaskIndex()
 	{
 		return chosenTaskIndex;
+	}
+
+	public ReplayExampleOrigin getOrigin()
+	{
+		return origin;
 	}
 }

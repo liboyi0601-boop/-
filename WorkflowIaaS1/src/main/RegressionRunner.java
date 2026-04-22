@@ -68,6 +68,11 @@ public class RegressionRunner
 		Path workloadPath = suite.getWorkloadPath();
 		if(!Files.exists(workloadPath))
 		{
+			if(suite.isBenchmark())
+			{
+				throw new IllegalStateException("Benchmark workload file does not exist: " + workloadPath.toString()
+						+ ". Generate it with ./scripts/generate_benchmark_workloads.sh " + suite.getSuiteName());
+			}
 			throw new IllegalStateException("Workload file does not exist: " + workloadPath);
 		}
 
@@ -136,7 +141,10 @@ public class RegressionRunner
 				configHash,
 				staticTags,
 				startedAt,
-				finishedAt);
+				finishedAt,
+				suite.buildDatasetMetadata(
+						Integer.valueOf(metrics.getWorkflowCount()),
+						Integer.valueOf(metrics.getTotalTaskCount())));
 
 		JsonSupport.writeJson(runDirectory.resolve("metrics.json"), metrics.toMap());
 		JsonSupport.writeJson(runDirectory.resolve("manifest.json"), manifest.toMap());
@@ -175,6 +183,7 @@ public class RegressionRunner
 		config.put("traceEnabled", options.traceEnabled);
 		config.put("decisionSnapshotLimit", options.snapshotLimit);
 		config.put("workloadPath", suite.getWorkloadPath().toString());
+		config.put("dataset", suite.buildDatasetMetadata(null, null));
 		config.put("staticTags", staticTags);
 		return config;
 	}

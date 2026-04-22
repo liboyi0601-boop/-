@@ -8,14 +8,22 @@ import java.util.Set;
 
 import vmInfo.SaaSVm;
 import workflow.WTask;
+import workflow.BenchmarkFamily;
 
 public final class ContextualExpertReplayCollector implements SchedulingTraceRecorder
 {
 	private final ContextualHierarchicalReplayBuffer replayBuffer;
+	private final String sourceSuiteName;
 
 	public ContextualExpertReplayCollector()
 	{
+		this(null);
+	}
+
+	public ContextualExpertReplayCollector(String sourceSuiteName)
+	{
 		this.replayBuffer = new ContextualHierarchicalReplayBuffer();
+		this.sourceSuiteName = sourceSuiteName;
 	}
 
 	public ContextualHierarchicalReplayBuffer getReplayBuffer()
@@ -49,10 +57,11 @@ public final class ContextualExpertReplayCollector implements SchedulingTraceRec
 		}
 
 		SchedulingState compactState = compactSnapshot(snapshot, taskSet);
+		ReplayExampleOrigin origin = buildOrigin(snapshot, taskSelection.getSelectedCandidate());
 		replayBuffer.addTaskExample(new TaskDecisionContextExample(compactState, taskSet, taskMask,
-				taskSelection.getSelectedIndex()));
+				taskSelection.getSelectedIndex(), origin));
 		replayBuffer.addVmExample(new VmDecisionContextExample(compactState, taskSelection.getSelectedCandidate(),
-				vmSet, vmMask, resourceSelection.getSelectedIndex()));
+				vmSet, vmMask, resourceSelection.getSelectedIndex(), origin));
 	}
 
 	public void recordActionApplied(int currentTime, SchedulingAction action, SaaSVm appliedVm) throws IOException
@@ -113,5 +122,20 @@ public final class ContextualExpertReplayCollector implements SchedulingTraceRec
 
 		return new SchedulingState(snapshot.getCurrentTime(), workflowStates, taskStates,
 				snapshot.getActiveVmStates(), snapshot.getOffVmStates(), globalTaskPoolTaskIds);
+	}
+
+	private ReplayExampleOrigin buildOrigin(SchedulingState snapshot, TaskCandidateView selectedTask)
+	{
+		String workflowName = null;
+		WorkflowStateView workflowState = snapshot.findWorkflowState(selectedTask.getWorkflowId());
+		if(workflowState != null)
+		{
+			workflowName = workflowState.getWorkflowName();
+		}
+
+		BenchmarkFamily benchmarkFamily = BenchmarkFamily.fromWorkflowName(workflowName);
+		return new ReplayExampleOrigin(sourceSuiteName,
+				benchmarkFamily == null ? null : benchmarkFamily.getFamilyName(),
+				workflowName);
 	}
 }

@@ -60,12 +60,30 @@ final class LearningExperimentSupport
 		return runDirectory;
 	}
 
+	static Path requireWorkloadPath(RegressionSuite suite)
+	{
+		Path workloadPath = suite.getWorkloadPath();
+		if(!Files.exists(workloadPath))
+		{
+			if(suite.isBenchmark())
+			{
+				throw new IllegalStateException("Benchmark workload file does not exist: " + workloadPath.toString()
+						+ ". Generate it with ./scripts/generate_benchmark_workloads.sh " + suite.getSuiteName());
+			}
+			throw new IllegalStateException("Workload file does not exist: " + workloadPath.toString());
+		}
+		return workloadPath;
+	}
+
 	static ExpertReplayData collectExpertReplay(Path workloadPath, RegressionSuite suite,
 			boolean collectFlatReplay, boolean collectContextualReplay) throws Exception
 	{
-		InMemoryExpertReplayCollector flatCollector = collectFlatReplay ? new InMemoryExpertReplayCollector() : null;
+		requireWorkloadPath(suite);
+		InMemoryExpertReplayCollector flatCollector = collectFlatReplay
+				? new InMemoryExpertReplayCollector(suite.getSuiteName())
+				: null;
 		ContextualExpertReplayCollector contextualCollector =
-				collectContextualReplay ? new ContextualExpertReplayCollector() : null;
+				collectContextualReplay ? new ContextualExpertReplayCollector(suite.getSuiteName()) : null;
 		SchedulingTraceRecorder recorder = buildRecorder(flatCollector, contextualCollector);
 
 		List<Workflow> expertWorkflows = WorkflowDatasetIO.readWorkflows(workloadPath);
@@ -87,6 +105,16 @@ final class LearningExperimentSupport
 				contextualCollector == null ? null : contextualCollector.getReplayBuffer());
 	}
 
+	static ExpertReplayData collectReferenceExpertReplay(RegressionSuite trainSuite, ExpertReplayData trainExpertReplayData,
+			RegressionSuite evalSuite) throws Exception
+	{
+		if(trainSuite == evalSuite)
+		{
+			return trainExpertReplayData;
+		}
+		return collectExpertReplay(evalSuite.getWorkloadPath(), evalSuite, false, false);
+	}
+
 	static EvaluationResult evaluate(Path workloadPath, SchedulingPolicy baselinePolicy,
 			HierarchicalSchedulingPolicy hierarchicalPolicy) throws Exception
 	{
@@ -104,39 +132,56 @@ final class LearningExperimentSupport
 				validationRecorder.getInvalidVmActionCount());
 	}
 
-	static Map<String, Object> buildManifest(String algorithmName, RegressionSuite suite, Path workloadPath,
-			String startedAt, String finishedAt, Map<String, Object> hyperParameters) throws IOException
+	static Map<String, Object> buildManifest(String algorithmName, RegressionSuite trainSuite, RegressionSuite evalSuite,
+			String startedAt, String finishedAt, Map<String, Object> hyperParameters,
+			ExpertReplayData trainExpertReplayData, ExpertReplayData evalExpertReplayData) throws IOException
 	{
 		GitMetadata gitMetadata = GitMetadata.read();
+		Path trainWorkloadPath = requireWorkloadPath(trainSuite);
+		Map<String, Object> trainDataset = buildDatasetMetadata(trainSuite, trainWorkloadPath, trainExpertReplayData);
+		Map<String, Object> evalDataset = buildDatasetMetadata(evalSuite, requireWorkloadPath(evalSuite),
+				evalExpertReplayData);
+		Map<String, Object> staticTags = buildStaticTagConfig();
+		Map<String, Object> config = new LinkedHashMap<String, Object>();
+		config.put("algorithmName", algorithmName);
+		config.put("trainDataset", trainDataset);
+		config.put("evalDataset", evalDataset);
+		config.put("hyperParameters", hyperParameters);
+		config.put("staticTags", staticTags);
+
 		Map<String, Object> manifest = new LinkedHashMap<String, Object>();
 		manifest.put("algorithmName", algorithmName);
-		manifest.put("suiteName", suite.getSuiteName());
-		manifest.put("workloadPath", workloadPath.toString());
-		manifest.put("workloadFingerprint", WorkloadFingerprint.fromFile(workloadPath));
+		manifest.put("suiteName", trainSuite.getSuiteName());
+		manifest.put("trainSuiteName", trainSuite.getSuiteName());
+		manifest.put("evalSuiteName", evalSuite.getSuiteName());
+		manifest.put("workloadPath", trainWorkloadPath.toString());
+		manifest.put("workloadFingerprint", WorkloadFingerprint.fromFile(trainWorkloadPath));
 		manifest.put("gitCommit", gitMetadata.commit);
 		manifest.put("gitBranch", gitMetadata.branch);
 		manifest.put("dirtyFlag", gitMetadata.dirty);
 		manifest.put("startedAt", startedAt);
 		manifest.put("finishedAt", finishedAt);
-		manifest.put("staticTags", buildStaticTagConfig());
+		manifest.put("staticTags", staticTags);
 		manifest.put("hyperParameters", hyperParameters);
+		manifest.put("trainDataset", trainDataset);
+		manifest.put("evalDataset", evalDataset);
 		manifest.put("configHash",
-				WorkloadFingerprint.sha256(JsonSupport.toJson(hyperParameters).getBytes(StandardCharsets.UTF_8)));
+				WorkloadFingerprint.sha256(JsonSupport.toJson(config).getBytes(StandardCharsets.UTF_8)));
 		return manifest;
 	}
 
-	static void writeArtifacts(Path runDirectory, ExpertReplayData expertReplayData,
+	static void writeArtifacts(Path runDirectory, ExpertReplayData referenceExpertReplayData,
 			Map<String, Object> replaySummary, Map<String, Object> trainingSummary, TrainingTelemetry telemetry,
 			EvaluationResult learnedResult, Map<String, Object> manifest) throws IOException
 	{
 		Map<String, Object> comparison = ComparisonSummaryWriter.buildComparison(
-				expertReplayData.getExpertMetrics(), learnedResult.getMetrics(),
-				expertReplayData.getExpertReward(), learnedResult.getReward());
+				referenceExpertReplayData.getExpertMetrics(), learnedResult.getMetrics(),
+				referenceExpertReplayData.getExpertReward(), learnedResult.getReward());
 
 		JsonSupport.writeJson(runDirectory.resolve("expert-metrics.json"),
-				expertReplayData.getExpertMetrics().toMap());
+				referenceExpertReplayData.getExpertMetrics().toMap());
 		JsonSupport.writeJson(runDirectory.resolve("expert-reward.json"),
-				expertReplayData.getExpertReward());
+				referenceExpertReplayData.getExpertReward());
 		JsonSupport.writeJson(runDirectory.resolve("replay-summary.json"), replaySummary);
 		JsonSupport.writeJson(runDirectory.resolve("training-summary.json"), trainingSummary);
 		writeEpochMetrics(runDirectory.resolve("epoch-metrics.jsonl"), telemetry);
@@ -159,6 +204,16 @@ final class LearningExperimentSupport
 			summary.put("contextualReplay", contextualReplay.toSummary());
 		}
 		return summary;
+	}
+
+	private static Map<String, Object> buildDatasetMetadata(RegressionSuite suite, Path workloadPath,
+			ExpertReplayData expertReplayData) throws IOException
+	{
+		Map<String, Object> metadata = suite.buildDatasetMetadata(
+				Integer.valueOf(expertReplayData.getExpertMetrics().getWorkflowCount()),
+				Integer.valueOf(expertReplayData.getExpertMetrics().getTotalTaskCount()));
+		metadata.put("workloadFingerprint", WorkloadFingerprint.fromFile(workloadPath));
+		return metadata;
 	}
 
 	static void validateContextualReplay(ContextualHierarchicalReplayBuffer replayBuffer)

@@ -48,7 +48,73 @@ public final class ContextualHierarchicalReplayBuffer
 		summary.put("meanVmCandidateCount", computeMeanVmCandidateCount());
 		summary.put("maxTaskCandidateCount", computeMaxTaskCandidateCount());
 		summary.put("maxVmCandidateCount", computeMaxVmCandidateCount());
+		summary.put("taskExampleBenchmarkFamilyCounts", countTaskBenchmarkFamilies());
+		summary.put("vmExampleBenchmarkFamilyCounts", countVmBenchmarkFamilies());
+		summary.put("taskExampleSuiteCounts", countTaskSuites());
+		summary.put("vmExampleSuiteCounts", countVmSuites());
 		return summary;
+	}
+
+	private Map<String, Integer> countTaskBenchmarkFamilies()
+	{
+		Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+		for(TaskDecisionContextExample example: taskExamples)
+		{
+			if(example.getOrigin() == null || example.getOrigin().getBenchmarkFamily() == null)
+			{
+				continue;
+			}
+			incrementCount(counts, example.getOrigin().getBenchmarkFamily());
+		}
+		return counts;
+	}
+
+	private Map<String, Integer> countVmBenchmarkFamilies()
+	{
+		Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+		for(VmDecisionContextExample example: vmExamples)
+		{
+			if(example.getOrigin() == null || example.getOrigin().getBenchmarkFamily() == null)
+			{
+				continue;
+			}
+			incrementCount(counts, example.getOrigin().getBenchmarkFamily());
+		}
+		return counts;
+	}
+
+	private Map<String, Integer> countTaskSuites()
+	{
+		Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+		for(TaskDecisionContextExample example: taskExamples)
+		{
+			if(example.getOrigin() == null || example.getOrigin().getSuiteName() == null)
+			{
+				continue;
+			}
+			incrementCount(counts, example.getOrigin().getSuiteName());
+		}
+		return counts;
+	}
+
+	private Map<String, Integer> countVmSuites()
+	{
+		Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+		for(VmDecisionContextExample example: vmExamples)
+		{
+			if(example.getOrigin() == null || example.getOrigin().getSuiteName() == null)
+			{
+				continue;
+			}
+			incrementCount(counts, example.getOrigin().getSuiteName());
+		}
+		return counts;
+	}
+
+	private void incrementCount(Map<String, Integer> counts, String key)
+	{
+		Integer current = counts.get(key);
+		counts.put(key, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
 	}
 
 	private double computeMeanTaskCandidateCount()

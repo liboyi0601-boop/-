@@ -8,12 +8,20 @@ public final class MaskedDecisionExample
 	private final List<double[]> candidateFeatures;
 	private final boolean[] validMask;
 	private final int chosenIndex;
+	private final ReplayExampleOrigin origin;
 
 	public MaskedDecisionExample(List<double[]> candidateFeatures, List<Boolean> validSelections, int chosenIndex)
+	{
+		this(candidateFeatures, validSelections, chosenIndex, null);
+	}
+
+	public MaskedDecisionExample(List<double[]> candidateFeatures, List<Boolean> validSelections, int chosenIndex,
+			ReplayExampleOrigin origin)
 	{
 		this.candidateFeatures = copyFeatures(candidateFeatures);
 		this.validMask = copyMask(validSelections);
 		this.chosenIndex = chosenIndex;
+		this.origin = origin;
 	}
 
 	public int size()
@@ -43,6 +51,11 @@ public final class MaskedDecisionExample
 			return 0;
 		}
 		return candidateFeatures.get(0).length;
+	}
+
+	public ReplayExampleOrigin getOrigin()
+	{
+		return origin;
 	}
 
 	private List<double[]> copyFeatures(List<double[]> sourceFeatures)

@@ -18,12 +18,16 @@ public class LearningRunner
 	public static void main(String[] args) throws Exception
 	{
 		RunnerOptions options = RunnerOptions.parse(args);
-		Path workloadPath = options.suite.getWorkloadPath();
-		Path runDirectory = LearningExperimentSupport.createRunDirectory(options.outputRoot, options.suite, "phase8");
+		Path trainWorkloadPath = LearningExperimentSupport.requireWorkloadPath(options.trainSuite);
+		Path evalWorkloadPath = LearningExperimentSupport.requireWorkloadPath(options.evalSuite);
+		Path runDirectory = LearningExperimentSupport.createRunDirectory(options.outputRoot, options.trainSuite, "phase8");
 		String startedAt = OffsetDateTime.now().toString();
 
-		LearningExperimentSupport.ExpertReplayData expertReplayData =
-				LearningExperimentSupport.collectExpertReplay(workloadPath, options.suite, true, false);
+		LearningExperimentSupport.ExpertReplayData trainExpertReplayData =
+				LearningExperimentSupport.collectExpertReplay(trainWorkloadPath, options.trainSuite, true, false);
+		LearningExperimentSupport.ExpertReplayData evalReferenceExpertReplayData =
+				LearningExperimentSupport.collectReferenceExpertReplay(
+						options.trainSuite, trainExpertReplayData, options.evalSuite);
 
 		OfflineWarmStartTrainer trainer = new OfflineWarmStartTrainer(
 				options.taskHiddenSize,
@@ -38,13 +42,13 @@ public class LearningRunner
 		OfflineWarmStartResult trainingResult;
 		try(EpochMetricsLogger epochLogger = LearningExperimentSupport.newEpochLogger(runDirectory))
 		{
-			trainingResult = trainer.train(expertReplayData.getFlatReplayBuffer(),
+			trainingResult = trainer.train(trainExpertReplayData.getFlatReplayBuffer(),
 					(epoch, trainingMetrics, baselinePolicy, hierarchicalPolicy) ->
 					{
 						try
 						{
 							LearningExperimentSupport.EvaluationResult epochEvaluation =
-									LearningExperimentSupport.evaluate(workloadPath, baselinePolicy, hierarchicalPolicy);
+									LearningExperimentSupport.evaluate(evalWorkloadPath, baselinePolicy, hierarchicalPolicy);
 							LearningExperimentSupport.logEpoch(epochLogger, telemetry, epoch,
 									trainingMetrics, epochEvaluation);
 						}
@@ -57,37 +61,43 @@ public class LearningRunner
 		}
 
 		LearningExperimentSupport.EvaluationResult learnedResult =
-				LearningExperimentSupport.evaluate(workloadPath, trainingResult.getPolicy(), trainingResult.getPolicy());
+				LearningExperimentSupport.evaluate(
+						evalWorkloadPath,
+						trainingResult.getPolicy(),
+						trainingResult.getPolicy());
 		ExperimentMetrics learnedMetrics = learnedResult.getMetrics();
 
 		Map<String, Object> trainingSummary = telemetry.enrichSummary(trainingResult.getSummary());
 		Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 				"PHASE8_HIERARCHICAL_WARM_START",
-				options.suite,
-				workloadPath,
+				options.trainSuite,
+				options.evalSuite,
 				startedAt,
 				OffsetDateTime.now().toString(),
-				options.toHyperParameters());
+				options.toHyperParameters(),
+				trainExpertReplayData,
+				evalReferenceExpertReplayData);
 
 		LearningExperimentSupport.writeArtifacts(
 				runDirectory,
-				expertReplayData,
-				LearningExperimentSupport.buildReplaySummary(expertReplayData.getFlatReplayBuffer(), null),
+				evalReferenceExpertReplayData,
+				LearningExperimentSupport.buildReplaySummary(trainExpertReplayData.getFlatReplayBuffer(), null),
 				trainingSummary,
 				telemetry,
 				learnedResult,
 				manifest);
 
 		System.out.println("Phase 8 learning run completed: " + runDirectory.toString());
-		System.out.println("Expert totalCost=" + expertReplayData.getExpertMetrics().getTotalCost()
+		System.out.println("Expert totalCost=" + evalReferenceExpertReplayData.getExpertMetrics().getTotalCost()
 				+ " learned totalCost=" + learnedMetrics.getTotalCost());
-		System.out.println("Expert reward=" + expertReplayData.getExpertReward().get("totalReward")
+		System.out.println("Expert reward=" + evalReferenceExpertReplayData.getExpertReward().get("totalReward")
 				+ " learned reward=" + learnedResult.getReward().get("totalReward"));
 	}
 
 	private static final class RunnerOptions
 	{
-		private final RegressionSuite suite;
+		private final RegressionSuite trainSuite;
+		private final RegressionSuite evalSuite;
 		private final int epochs;
 		private final int taskHiddenSize;
 		private final int vmHiddenSize;
@@ -97,10 +107,12 @@ public class LearningRunner
 		private final long seed;
 		private final Path outputRoot;
 
-		private RunnerOptions(RegressionSuite suite, int epochs, int taskHiddenSize, int vmHiddenSize,
+		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, int epochs, int taskHiddenSize,
+				int vmHiddenSize,
 				double learningRate, double l2, double epsilon, long seed, Path outputRoot)
 		{
-			this.suite = suite;
+			this.trainSuite = trainSuite;
+			this.evalSuite = evalSuite;
 			this.epochs = epochs;
 			this.taskHiddenSize = taskHiddenSize;
 			this.vmHiddenSize = vmHiddenSize;
@@ -114,6 +126,8 @@ public class LearningRunner
 		private static RunnerOptions parse(String[] args)
 		{
 			RegressionSuite suite = RegressionSuite.AUX_SMALL;
+			RegressionSuite trainSuite = null;
+			RegressionSuite evalSuite = null;
 			int epochs = 8;
 			int taskHiddenSize = 24;
 			int vmHiddenSize = 24;
@@ -130,6 +144,16 @@ public class LearningRunner
 				{
 					index++;
 					suite = RegressionSuite.fromName(args[index]);
+				}
+				else if("--train-suite".equals(arg))
+				{
+					index++;
+					trainSuite = RegressionSuite.fromName(args[index]);
+				}
+				else if("--eval-suite".equals(arg))
+				{
+					index++;
+					evalSuite = RegressionSuite.fromName(args[index]);
 				}
 				else if("--epochs".equals(arg))
 				{
@@ -177,7 +201,9 @@ public class LearningRunner
 				}
 			}
 
-			return new RunnerOptions(suite, epochs, taskHiddenSize, vmHiddenSize,
+			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
+			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
+			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, epochs, taskHiddenSize, vmHiddenSize,
 					learningRate, l2, epsilon, seed, outputRoot);
 		}
 
@@ -192,6 +218,8 @@ public class LearningRunner
 			hyperParameters.put("l2", l2);
 			hyperParameters.put("epsilon", epsilon);
 			hyperParameters.put("seed", seed);
+			hyperParameters.put("trainSuiteName", trainSuite.getSuiteName());
+			hyperParameters.put("evalSuiteName", evalSuite.getSuiteName());
 			return hyperParameters;
 		}
 	}

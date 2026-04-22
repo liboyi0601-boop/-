@@ -19,11 +19,21 @@ public final class ExperimentManifest
 	private final Map<String, Object> staticTagConfig;
 	private final String startedAt;
 	private final String finishedAt;
+	private final Map<String, Object> dataset;
 
 	public ExperimentManifest(String runId, String algorithmName, String gitCommit, String gitBranch,
 			boolean dirtyFlag, String workloadPath, String workloadFingerprint, long seed, boolean traceEnabled,
 			int decisionSnapshotLimit, String configHash, Map<String, Object> staticTagConfig, String startedAt,
 			String finishedAt)
+	{
+		this(runId, algorithmName, gitCommit, gitBranch, dirtyFlag, workloadPath, workloadFingerprint, seed,
+				traceEnabled, decisionSnapshotLimit, configHash, staticTagConfig, startedAt, finishedAt, null);
+	}
+
+	public ExperimentManifest(String runId, String algorithmName, String gitCommit, String gitBranch,
+			boolean dirtyFlag, String workloadPath, String workloadFingerprint, long seed, boolean traceEnabled,
+			int decisionSnapshotLimit, String configHash, Map<String, Object> staticTagConfig, String startedAt,
+			String finishedAt, Map<String, Object> dataset)
 	{
 		this.runId = runId;
 		this.algorithmName = algorithmName;
@@ -39,6 +49,7 @@ public final class ExperimentManifest
 		this.staticTagConfig = new LinkedHashMap<String, Object>(staticTagConfig);
 		this.startedAt = startedAt;
 		this.finishedAt = finishedAt;
+		this.dataset = dataset == null ? null : new LinkedHashMap<String, Object>(dataset);
 	}
 
 	public Map<String, Object> toMap()
@@ -58,6 +69,10 @@ public final class ExperimentManifest
 		map.put("staticTags", new LinkedHashMap<String, Object>(staticTagConfig));
 		map.put("startedAt", startedAt);
 		map.put("finishedAt", finishedAt);
+		if(dataset != null)
+		{
+			map.put("dataset", new LinkedHashMap<String, Object>(dataset));
+		}
 		return map;
 	}
 }

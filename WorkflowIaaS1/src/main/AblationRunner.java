@@ -20,16 +20,30 @@ public class AblationRunner
 	public static void main(String[] args) throws Exception
 	{
 		RunnerOptions options = RunnerOptions.parse(args);
-		Path workloadPath = options.suite.getWorkloadPath();
-		Path runDirectory = LearningExperimentSupport.createRunDirectory(options.outputRoot, options.suite, "phase10a");
+		Path trainWorkloadPath = LearningExperimentSupport.requireWorkloadPath(options.trainSuite);
+		Path evalWorkloadPath = LearningExperimentSupport.requireWorkloadPath(options.evalSuite);
+		Path runDirectory = LearningExperimentSupport.createRunDirectory(options.outputRoot, options.trainSuite, "phase10a");
 		String startedAt = OffsetDateTime.now().toString();
+		List<String> resolvedVariants = options.resolveVariants();
+		boolean requiresFlatReplay = requiresFlatReplay(resolvedVariants);
+		boolean requiresContextualReplay = requiresContextualReplay(resolvedVariants);
 
-		LearningExperimentSupport.ExpertReplayData expertReplayData =
-				LearningExperimentSupport.collectExpertReplay(workloadPath, options.suite, true, true);
-		LearningExperimentSupport.validateContextualReplay(expertReplayData.getContextualReplayBuffer());
+		LearningExperimentSupport.ExpertReplayData trainExpertReplayData =
+				LearningExperimentSupport.collectExpertReplay(
+						trainWorkloadPath,
+						options.trainSuite,
+						requiresFlatReplay,
+						requiresContextualReplay);
+		LearningExperimentSupport.ExpertReplayData evalReferenceExpertReplayData =
+				LearningExperimentSupport.collectReferenceExpertReplay(
+						options.trainSuite, trainExpertReplayData, options.evalSuite);
+		if(requiresContextualReplay)
+		{
+			LearningExperimentSupport.validateContextualReplay(trainExpertReplayData.getContextualReplayBuffer());
+		}
 		Map<String, Object> replaySummary = LearningExperimentSupport.buildReplaySummary(
-				expertReplayData.getFlatReplayBuffer(),
-				expertReplayData.getContextualReplayBuffer());
+				trainExpertReplayData.getFlatReplayBuffer(),
+				trainExpertReplayData.getContextualReplayBuffer());
 
 		List<Map<String, Object>> variantSummaries = new ArrayList<Map<String, Object>>();
 		AblationPolicyFactory.TrainingOptions trainingOptions = new AblationPolicyFactory.TrainingOptions(
@@ -43,7 +57,7 @@ public class AblationRunner
 				options.epsilon,
 				options.seed);
 
-		for(String variantName: options.resolveVariants())
+		for(String variantName: resolvedVariants)
 		{
 			Path variantDirectory = runDirectory.resolve(variantName);
 			Files.createDirectories(variantDirectory);
@@ -55,15 +69,15 @@ public class AblationRunner
 			{
 				trainingResult = AblationPolicyFactory.trainVariant(
 						variantName,
-						expertReplayData.getFlatReplayBuffer(),
-						expertReplayData.getContextualReplayBuffer(),
+						trainExpertReplayData.getFlatReplayBuffer(),
+						trainExpertReplayData.getContextualReplayBuffer(),
 						trainingOptions,
 						(epoch, trainingMetrics, baselinePolicy, hierarchicalPolicy) ->
 						{
 							try
 							{
 								LearningExperimentSupport.EvaluationResult epochEvaluation =
-										LearningExperimentSupport.evaluate(workloadPath, baselinePolicy, hierarchicalPolicy);
+										LearningExperimentSupport.evaluate(evalWorkloadPath, baselinePolicy, hierarchicalPolicy);
 								LearningExperimentSupport.logEpoch(epochLogger, telemetry, epoch,
 										trainingMetrics, epochEvaluation);
 							}
@@ -75,7 +89,7 @@ public class AblationRunner
 						});
 
 				learnedResult = LearningExperimentSupport.evaluate(
-						workloadPath,
+						evalWorkloadPath,
 						trainingResult.getBaselinePolicy(),
 						trainingResult.getHierarchicalPolicy());
 
@@ -104,15 +118,17 @@ public class AblationRunner
 			Map<String, Object> trainingSummary = telemetry.enrichSummary(trainingResult.getSummary());
 			Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 					trainingResult.getAlgorithmName(),
-					options.suite,
-					workloadPath,
+					options.trainSuite,
+					options.evalSuite,
 					startedAt,
 					OffsetDateTime.now().toString(),
-					options.toHyperParameters(variantName));
+					options.toHyperParameters(variantName),
+					trainExpertReplayData,
+					evalReferenceExpertReplayData);
 
 			LearningExperimentSupport.writeArtifacts(
 					variantDirectory,
-					expertReplayData,
+					evalReferenceExpertReplayData,
 					replaySummary,
 					trainingSummary,
 					telemetry,
@@ -120,9 +136,9 @@ public class AblationRunner
 					manifest);
 
 			Map<String, Object> comparison = ComparisonSummaryWriter.buildComparison(
-					expertReplayData.getExpertMetrics(),
+					evalReferenceExpertReplayData.getExpertMetrics(),
 					learnedResult.getMetrics(),
-					expertReplayData.getExpertReward(),
+					evalReferenceExpertReplayData.getExpertReward(),
 					learnedResult.getReward());
 			variantSummaries.add(ComparisonSummaryWriter.buildVariantSummary(
 					variantName, trainingSummary, comparison));
@@ -138,9 +154,42 @@ public class AblationRunner
 				|| AblationPolicyFactory.HEURISTIC_RERANK.equals(variantName);
 	}
 
+	private static boolean requiresFlatReplay(List<String> variantNames)
+	{
+		for(String variantName: variantNames)
+		{
+			if(AblationPolicyFactory.PHASE8_MLP.equals(variantName)
+					|| AblationPolicyFactory.PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName)
+					|| AblationPolicyFactory.PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName)
+					|| AblationPolicyFactory.PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName)
+					|| AblationPolicyFactory.PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean requiresContextualReplay(List<String> variantNames)
+	{
+		for(String variantName: variantNames)
+		{
+			if(AblationPolicyFactory.PHASE9_GRAPH_PLUS_VM_ATTENTION.equals(variantName)
+					|| AblationPolicyFactory.PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName)
+					|| AblationPolicyFactory.PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName)
+					|| AblationPolicyFactory.PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName)
+					|| AblationPolicyFactory.PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static final class RunnerOptions
 	{
-		private final RegressionSuite suite;
+		private final RegressionSuite trainSuite;
+		private final RegressionSuite evalSuite;
 		private final List<String> variants;
 		private final boolean includeHeuristic;
 		private final int epochs;
@@ -154,11 +203,13 @@ public class AblationRunner
 		private final long seed;
 		private final Path outputRoot;
 
-		private RunnerOptions(RegressionSuite suite, List<String> variants, boolean includeHeuristic, int epochs,
+		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, List<String> variants,
+				boolean includeHeuristic, int epochs,
 				int taskHiddenSize, int graphHiddenSize, int vmHiddenSize, int graphLayers, double learningRate,
 				double l2, double epsilon, long seed, Path outputRoot)
 		{
-			this.suite = suite;
+			this.trainSuite = trainSuite;
+			this.evalSuite = evalSuite;
 			this.variants = variants;
 			this.includeHeuristic = includeHeuristic;
 			this.epochs = epochs;
@@ -196,12 +247,16 @@ public class AblationRunner
 			hyperParameters.put("l2", l2);
 			hyperParameters.put("epsilon", epsilon);
 			hyperParameters.put("seed", seed);
+			hyperParameters.put("trainSuiteName", trainSuite.getSuiteName());
+			hyperParameters.put("evalSuiteName", evalSuite.getSuiteName());
 			return hyperParameters;
 		}
 
 		private static RunnerOptions parse(String[] args)
 		{
 			RegressionSuite suite = RegressionSuite.AUX_SMALL;
+			RegressionSuite trainSuite = null;
+			RegressionSuite evalSuite = null;
 			List<String> variants = new ArrayList<String>(AblationPolicyFactory.defaultVariantNames());
 			boolean includeHeuristic = false;
 			int epochs = 8;
@@ -222,6 +277,16 @@ public class AblationRunner
 				{
 					index++;
 					suite = RegressionSuite.fromName(args[index]);
+				}
+				else if("--train-suite".equals(arg))
+				{
+					index++;
+					trainSuite = RegressionSuite.fromName(args[index]);
+				}
+				else if("--eval-suite".equals(arg))
+				{
+					index++;
+					evalSuite = RegressionSuite.fromName(args[index]);
 				}
 				else if("--variants".equals(arg))
 				{
@@ -305,7 +370,9 @@ public class AblationRunner
 				}
 			}
 
-			return new RunnerOptions(suite, variants, includeHeuristic, epochs, taskHiddenSize,
+			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
+			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
+			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, variants, includeHeuristic, epochs, taskHiddenSize,
 					graphHiddenSize, vmHiddenSize, graphLayers, learningRate, l2, epsilon, seed, outputRoot);
 		}
 	}

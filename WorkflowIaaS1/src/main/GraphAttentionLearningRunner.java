@@ -19,13 +19,17 @@ public class GraphAttentionLearningRunner
 	public static void main(String[] args) throws Exception
 	{
 		RunnerOptions options = RunnerOptions.parse(args);
-		Path workloadPath = options.suite.getWorkloadPath();
-		Path runDirectory = LearningExperimentSupport.createRunDirectory(options.outputRoot, options.suite, "phase9");
+		Path trainWorkloadPath = LearningExperimentSupport.requireWorkloadPath(options.trainSuite);
+		Path evalWorkloadPath = LearningExperimentSupport.requireWorkloadPath(options.evalSuite);
+		Path runDirectory = LearningExperimentSupport.createRunDirectory(options.outputRoot, options.trainSuite, "phase9");
 		String startedAt = OffsetDateTime.now().toString();
 
-		LearningExperimentSupport.ExpertReplayData expertReplayData =
-				LearningExperimentSupport.collectExpertReplay(workloadPath, options.suite, false, true);
-		ContextualHierarchicalReplayBuffer replayBuffer = expertReplayData.getContextualReplayBuffer();
+		LearningExperimentSupport.ExpertReplayData trainExpertReplayData =
+				LearningExperimentSupport.collectExpertReplay(trainWorkloadPath, options.trainSuite, false, true);
+		LearningExperimentSupport.ExpertReplayData evalReferenceExpertReplayData =
+				LearningExperimentSupport.collectReferenceExpertReplay(
+						options.trainSuite, trainExpertReplayData, options.evalSuite);
+		ContextualHierarchicalReplayBuffer replayBuffer = trainExpertReplayData.getContextualReplayBuffer();
 		LearningExperimentSupport.validateContextualReplay(replayBuffer);
 
 		GraphAttentionWarmStartTrainer trainer = new GraphAttentionWarmStartTrainer(
@@ -48,7 +52,7 @@ public class GraphAttentionLearningRunner
 						try
 						{
 							LearningExperimentSupport.EvaluationResult epochEvaluation =
-									LearningExperimentSupport.evaluate(workloadPath, baselinePolicy, hierarchicalPolicy);
+									LearningExperimentSupport.evaluate(evalWorkloadPath, baselinePolicy, hierarchicalPolicy);
 							LearningExperimentSupport.logEpoch(epochLogger, telemetry, epoch,
 									trainingMetrics, epochEvaluation);
 						}
@@ -61,21 +65,23 @@ public class GraphAttentionLearningRunner
 		}
 
 		LearningExperimentSupport.EvaluationResult learnedResult =
-				LearningExperimentSupport.evaluate(workloadPath, null, trainingResult.getPolicy());
+				LearningExperimentSupport.evaluate(evalWorkloadPath, null, trainingResult.getPolicy());
 		ExperimentMetrics learnedMetrics = learnedResult.getMetrics();
 
 		Map<String, Object> trainingSummary = telemetry.enrichSummary(trainingResult.getSummary());
 		Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 				"PHASE9_GRAPH_ATTENTION_WARM_START",
-				options.suite,
-				workloadPath,
+				options.trainSuite,
+				options.evalSuite,
 				startedAt,
 				OffsetDateTime.now().toString(),
-				options.toHyperParameters());
+				options.toHyperParameters(),
+				trainExpertReplayData,
+				evalReferenceExpertReplayData);
 
 		LearningExperimentSupport.writeArtifacts(
 				runDirectory,
-				expertReplayData,
+				evalReferenceExpertReplayData,
 				LearningExperimentSupport.buildReplaySummary(null, replayBuffer),
 				trainingSummary,
 				telemetry,
@@ -83,15 +89,16 @@ public class GraphAttentionLearningRunner
 				manifest);
 
 		System.out.println("Phase 9 graph-attention run completed: " + runDirectory.toString());
-		System.out.println("Expert totalCost=" + expertReplayData.getExpertMetrics().getTotalCost()
+		System.out.println("Expert totalCost=" + evalReferenceExpertReplayData.getExpertMetrics().getTotalCost()
 				+ " learned totalCost=" + learnedMetrics.getTotalCost());
-		System.out.println("Expert reward=" + expertReplayData.getExpertReward().get("totalReward")
+		System.out.println("Expert reward=" + evalReferenceExpertReplayData.getExpertReward().get("totalReward")
 				+ " learned reward=" + learnedResult.getReward().get("totalReward"));
 	}
 
 	private static final class RunnerOptions
 	{
-		private final RegressionSuite suite;
+		private final RegressionSuite trainSuite;
+		private final RegressionSuite evalSuite;
 		private final int epochs;
 		private final int graphHiddenSize;
 		private final int vmHiddenSize;
@@ -102,10 +109,12 @@ public class GraphAttentionLearningRunner
 		private final long seed;
 		private final Path outputRoot;
 
-		private RunnerOptions(RegressionSuite suite, int epochs, int graphHiddenSize, int vmHiddenSize,
+		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, int epochs, int graphHiddenSize,
+				int vmHiddenSize,
 				int graphLayers, double learningRate, double l2, double epsilon, long seed, Path outputRoot)
 		{
-			this.suite = suite;
+			this.trainSuite = trainSuite;
+			this.evalSuite = evalSuite;
 			this.epochs = epochs;
 			this.graphHiddenSize = graphHiddenSize;
 			this.vmHiddenSize = vmHiddenSize;
@@ -120,6 +129,8 @@ public class GraphAttentionLearningRunner
 		private static RunnerOptions parse(String[] args)
 		{
 			RegressionSuite suite = RegressionSuite.AUX_SMALL;
+			RegressionSuite trainSuite = null;
+			RegressionSuite evalSuite = null;
 			int epochs = 8;
 			int graphHiddenSize = 24;
 			int vmHiddenSize = 24;
@@ -137,6 +148,16 @@ public class GraphAttentionLearningRunner
 				{
 					index++;
 					suite = RegressionSuite.fromName(args[index]);
+				}
+				else if("--train-suite".equals(arg))
+				{
+					index++;
+					trainSuite = RegressionSuite.fromName(args[index]);
+				}
+				else if("--eval-suite".equals(arg))
+				{
+					index++;
+					evalSuite = RegressionSuite.fromName(args[index]);
 				}
 				else if("--epochs".equals(arg))
 				{
@@ -189,7 +210,10 @@ public class GraphAttentionLearningRunner
 				}
 			}
 
-			return new RunnerOptions(suite, epochs, graphHiddenSize, vmHiddenSize, graphLayers,
+			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
+			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
+			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, epochs, graphHiddenSize, vmHiddenSize,
+					graphLayers,
 					learningRate, l2, epsilon, seed, outputRoot);
 		}
 
@@ -206,6 +230,8 @@ public class GraphAttentionLearningRunner
 			hyperParameters.put("l2", l2);
 			hyperParameters.put("epsilon", epsilon);
 			hyperParameters.put("seed", seed);
+			hyperParameters.put("trainSuiteName", trainSuite.getSuiteName());
+			hyperParameters.put("evalSuiteName", evalSuite.getSuiteName());
 			return hyperParameters;
 		}
 	}
