@@ -29,7 +29,15 @@ public class GraphAttentionLearningRunner
 		LearningExperimentSupport.ExpertReplayData evalReferenceExpertReplayData =
 				LearningExperimentSupport.collectReferenceExpertReplay(
 						options.trainSuite, trainExpertReplayData, options.evalSuite);
-		ContextualHierarchicalReplayBuffer replayBuffer = trainExpertReplayData.getContextualReplayBuffer();
+		LearningExperimentSupport.ReplayPreparation replayPreparation =
+				LearningExperimentSupport.prepareReplayForTraining(
+						options.trainSuite,
+						null,
+						trainExpertReplayData.getContextualReplayBuffer(),
+						options.balancedFamilies,
+						options.balanceStrategy,
+						options.seed);
+		ContextualHierarchicalReplayBuffer replayBuffer = replayPreparation.getContextualReplayBuffer();
 		LearningExperimentSupport.validateContextualReplay(replayBuffer);
 
 		GraphAttentionWarmStartTrainer trainer = new GraphAttentionWarmStartTrainer(
@@ -68,7 +76,17 @@ public class GraphAttentionLearningRunner
 				LearningExperimentSupport.evaluate(evalWorkloadPath, null, trainingResult.getPolicy());
 		ExperimentMetrics learnedMetrics = learnedResult.getMetrics();
 
-		Map<String, Object> trainingSummary = telemetry.enrichSummary(trainingResult.getSummary());
+		Map<String, Object> comparison = ScheduleAgorithm.ComparisonSummaryWriter.buildComparison(
+				evalReferenceExpertReplayData.getExpertMetrics(),
+				learnedResult.getMetrics(),
+				evalReferenceExpertReplayData.getExpertReward(),
+				learnedResult.getReward(),
+				options.normalizedComparison,
+				options.normalizationEpsilon);
+		Map<String, Object> trainingSummary = LearningExperimentSupport.enrichTrainingSummary(
+				telemetry.enrichSummary(trainingResult.getSummary()),
+				replayPreparation.getReplayBalancingSummary(),
+				ScheduleAgorithm.ComparisonSummaryWriter.buildNormalizedComparisonSummary(comparison));
 		Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 				"PHASE9_GRAPH_ATTENTION_WARM_START",
 				options.trainSuite,
@@ -77,15 +95,21 @@ public class GraphAttentionLearningRunner
 				OffsetDateTime.now().toString(),
 				options.toHyperParameters(),
 				trainExpertReplayData,
-				evalReferenceExpertReplayData);
+				evalReferenceExpertReplayData,
+				replayPreparation.getReplayBalancingSummary(),
+				LearningExperimentSupport.buildAnalysisOptions(
+						options.normalizedComparison, options.normalizationEpsilon));
 
 		LearningExperimentSupport.writeArtifacts(
 				runDirectory,
 				evalReferenceExpertReplayData,
-				LearningExperimentSupport.buildReplaySummary(null, replayBuffer),
+				LearningExperimentSupport.buildReplaySummary(
+						null, trainExpertReplayData.getContextualReplayBuffer(),
+						replayPreparation.getReplayBalancingSummary()),
 				trainingSummary,
 				telemetry,
 				learnedResult,
+				comparison,
 				manifest);
 
 		System.out.println("Phase 9 graph-attention run completed: " + runDirectory.toString());
@@ -107,11 +131,17 @@ public class GraphAttentionLearningRunner
 		private final double l2;
 		private final double epsilon;
 		private final long seed;
+		private final boolean balancedFamilies;
+		private final String balanceStrategy;
+		private final boolean normalizedComparison;
+		private final double normalizationEpsilon;
 		private final Path outputRoot;
 
 		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, int epochs, int graphHiddenSize,
 				int vmHiddenSize,
-				int graphLayers, double learningRate, double l2, double epsilon, long seed, Path outputRoot)
+				int graphLayers, double learningRate, double l2, double epsilon, long seed,
+				boolean balancedFamilies, String balanceStrategy, boolean normalizedComparison,
+				double normalizationEpsilon, Path outputRoot)
 		{
 			this.trainSuite = trainSuite;
 			this.evalSuite = evalSuite;
@@ -123,6 +153,10 @@ public class GraphAttentionLearningRunner
 			this.l2 = l2;
 			this.epsilon = epsilon;
 			this.seed = seed;
+			this.balancedFamilies = balancedFamilies;
+			this.balanceStrategy = balanceStrategy;
+			this.normalizedComparison = normalizedComparison;
+			this.normalizationEpsilon = normalizationEpsilon;
 			this.outputRoot = outputRoot;
 		}
 
@@ -139,6 +173,10 @@ public class GraphAttentionLearningRunner
 			double l2 = 0.0001;
 			double epsilon = 0.0;
 			long seed = 20260420L;
+			boolean balancedFamilies = false;
+			String balanceStrategy = ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA;
+			boolean normalizedComparison = false;
+			double normalizationEpsilon = 1e-9;
 			Path outputRoot = Paths.get("learning-artifacts");
 
 			for(int index = 0; index < args.length; index++)
@@ -199,6 +237,24 @@ public class GraphAttentionLearningRunner
 					index++;
 					seed = Long.parseLong(args[index]);
 				}
+				else if("--balanced-families".equals(arg))
+				{
+					balancedFamilies = true;
+				}
+				else if("--balance-strategy".equals(arg))
+				{
+					index++;
+					balanceStrategy = args[index];
+				}
+				else if("--normalized-comparison".equals(arg))
+				{
+					normalizedComparison = true;
+				}
+				else if("--normalization-epsilon".equals(arg))
+				{
+					index++;
+					normalizationEpsilon = Double.parseDouble(args[index]);
+				}
 				else if("--out".equals(arg))
 				{
 					index++;
@@ -210,11 +266,17 @@ public class GraphAttentionLearningRunner
 				}
 			}
 
+			if(!ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA.equals(balanceStrategy))
+			{
+				throw new IllegalArgumentException("Unsupported balance strategy: " + balanceStrategy);
+			}
+
 			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
 			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
 			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, epochs, graphHiddenSize, vmHiddenSize,
 					graphLayers,
-					learningRate, l2, epsilon, seed, outputRoot);
+					learningRate, l2, epsilon, seed, balancedFamilies, balanceStrategy,
+					normalizedComparison, normalizationEpsilon, outputRoot);
 		}
 
 		private Map<String, Object> toHyperParameters()
@@ -232,6 +294,16 @@ public class GraphAttentionLearningRunner
 			hyperParameters.put("seed", seed);
 			hyperParameters.put("trainSuiteName", trainSuite.getSuiteName());
 			hyperParameters.put("evalSuiteName", evalSuite.getSuiteName());
+			if(balancedFamilies)
+			{
+				hyperParameters.put("balancedFamilies", Boolean.TRUE);
+				hyperParameters.put("balanceStrategy", balanceStrategy);
+			}
+			if(normalizedComparison)
+			{
+				hyperParameters.put("normalizedComparison", Boolean.TRUE);
+				hyperParameters.put("normalizationEpsilon", normalizationEpsilon);
+			}
 			return hyperParameters;
 		}
 	}

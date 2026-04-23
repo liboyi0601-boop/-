@@ -34,16 +34,25 @@ public class AblationRunner
 						options.trainSuite,
 						requiresFlatReplay,
 						requiresContextualReplay);
+		LearningExperimentSupport.ReplayPreparation replayPreparation =
+				LearningExperimentSupport.prepareReplayForTraining(
+						options.trainSuite,
+						trainExpertReplayData.getFlatReplayBuffer(),
+						trainExpertReplayData.getContextualReplayBuffer(),
+						options.balancedFamilies,
+						options.balanceStrategy,
+						options.seed);
 		LearningExperimentSupport.ExpertReplayData evalReferenceExpertReplayData =
 				LearningExperimentSupport.collectReferenceExpertReplay(
 						options.trainSuite, trainExpertReplayData, options.evalSuite);
 		if(requiresContextualReplay)
 		{
-			LearningExperimentSupport.validateContextualReplay(trainExpertReplayData.getContextualReplayBuffer());
+			LearningExperimentSupport.validateContextualReplay(replayPreparation.getContextualReplayBuffer());
 		}
 		Map<String, Object> replaySummary = LearningExperimentSupport.buildReplaySummary(
 				trainExpertReplayData.getFlatReplayBuffer(),
-				trainExpertReplayData.getContextualReplayBuffer());
+				trainExpertReplayData.getContextualReplayBuffer(),
+				replayPreparation.getReplayBalancingSummary());
 
 		List<Map<String, Object>> variantSummaries = new ArrayList<Map<String, Object>>();
 		AblationPolicyFactory.TrainingOptions trainingOptions = new AblationPolicyFactory.TrainingOptions(
@@ -69,8 +78,8 @@ public class AblationRunner
 			{
 				trainingResult = AblationPolicyFactory.trainVariant(
 						variantName,
-						trainExpertReplayData.getFlatReplayBuffer(),
-						trainExpertReplayData.getContextualReplayBuffer(),
+						replayPreparation.getFlatReplayBuffer(),
+						replayPreparation.getContextualReplayBuffer(),
 						trainingOptions,
 						(epoch, trainingMetrics, baselinePolicy, hierarchicalPolicy) ->
 						{
@@ -115,7 +124,21 @@ public class AblationRunner
 						+ learnedResult.getInvalidVmActionCount());
 			}
 
-			Map<String, Object> trainingSummary = telemetry.enrichSummary(trainingResult.getSummary());
+			Map<String, Object> comparison = ComparisonSummaryWriter.buildComparison(
+					evalReferenceExpertReplayData.getExpertMetrics(),
+					learnedResult.getMetrics(),
+					evalReferenceExpertReplayData.getExpertReward(),
+					learnedResult.getReward(),
+					options.normalizedComparison,
+					options.normalizationEpsilon);
+			Map<String, Object> variantReplayBalancing = resolveVariantReplayBalancingSummary(
+					variantName,
+					replayPreparation.getReplayBalancingSummary(),
+					options);
+			Map<String, Object> trainingSummary = LearningExperimentSupport.enrichTrainingSummary(
+					telemetry.enrichSummary(trainingResult.getSummary()),
+					variantReplayBalancing,
+					ComparisonSummaryWriter.buildNormalizedComparisonSummary(comparison));
 			Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 					trainingResult.getAlgorithmName(),
 					options.trainSuite,
@@ -124,7 +147,10 @@ public class AblationRunner
 					OffsetDateTime.now().toString(),
 					options.toHyperParameters(variantName),
 					trainExpertReplayData,
-					evalReferenceExpertReplayData);
+					evalReferenceExpertReplayData,
+					variantReplayBalancing,
+					LearningExperimentSupport.buildAnalysisOptions(
+							options.normalizedComparison, options.normalizationEpsilon));
 
 			LearningExperimentSupport.writeArtifacts(
 					variantDirectory,
@@ -133,13 +159,8 @@ public class AblationRunner
 					trainingSummary,
 					telemetry,
 					learnedResult,
+					comparison,
 					manifest);
-
-			Map<String, Object> comparison = ComparisonSummaryWriter.buildComparison(
-					evalReferenceExpertReplayData.getExpertMetrics(),
-					learnedResult.getMetrics(),
-					evalReferenceExpertReplayData.getExpertReward(),
-					learnedResult.getReward());
 			variantSummaries.add(ComparisonSummaryWriter.buildVariantSummary(
 					variantName, trainingSummary, comparison));
 		}
@@ -154,15 +175,76 @@ public class AblationRunner
 				|| AblationPolicyFactory.HEURISTIC_RERANK.equals(variantName);
 	}
 
+	private static Map<String, Object> resolveVariantReplayBalancingSummary(String variantName,
+			Map<String, Object> globalReplayBalancing, RunnerOptions options)
+	{
+		if(!options.balancedFamilies)
+		{
+			return null;
+		}
+		if(usesReplay(variantName))
+		{
+			if(globalReplayBalancing == null)
+			{
+				return null;
+			}
+			Map<String, Object> filtered = new LinkedHashMap<String, Object>();
+			copyIfPresent(filtered, globalReplayBalancing, "enabled");
+			copyIfPresent(filtered, globalReplayBalancing, "mode");
+			copyIfPresent(filtered, globalReplayBalancing, "strategy");
+			copyIfPresent(filtered, globalReplayBalancing, "seed");
+			if(usesFlatReplay(variantName))
+			{
+				copyIfPresent(filtered, globalReplayBalancing, "flat");
+			}
+			if(usesContextualReplay(variantName))
+			{
+				copyIfPresent(filtered, globalReplayBalancing, "contextual");
+			}
+			return filtered;
+		}
+		return LearningExperimentSupport.buildNotApplicableReplayBalancing(
+				options.balanceStrategy,
+				options.seed,
+				"selected-variant-does-not-use-replay");
+	}
+
+	private static boolean usesReplay(String variantName)
+	{
+		return usesFlatReplay(variantName) || usesContextualReplay(variantName);
+	}
+
+	private static boolean usesFlatReplay(String variantName)
+	{
+		return AblationPolicyFactory.PHASE8_MLP.equals(variantName)
+				|| AblationPolicyFactory.PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName)
+				|| AblationPolicyFactory.PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName)
+				|| AblationPolicyFactory.PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName)
+				|| AblationPolicyFactory.PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName);
+	}
+
+	private static boolean usesContextualReplay(String variantName)
+	{
+		return AblationPolicyFactory.PHASE9_GRAPH_PLUS_VM_ATTENTION.equals(variantName)
+				|| AblationPolicyFactory.PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName)
+				|| AblationPolicyFactory.PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName)
+				|| AblationPolicyFactory.PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName)
+				|| AblationPolicyFactory.PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName);
+	}
+
+	private static void copyIfPresent(Map<String, Object> target, Map<String, Object> source, String key)
+	{
+		if(source.containsKey(key))
+		{
+			target.put(key, source.get(key));
+		}
+	}
+
 	private static boolean requiresFlatReplay(List<String> variantNames)
 	{
 		for(String variantName: variantNames)
 		{
-			if(AblationPolicyFactory.PHASE8_MLP.equals(variantName)
-					|| AblationPolicyFactory.PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName)
-					|| AblationPolicyFactory.PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName)
-					|| AblationPolicyFactory.PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName)
-					|| AblationPolicyFactory.PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName))
+			if(usesFlatReplay(variantName))
 			{
 				return true;
 			}
@@ -174,11 +256,7 @@ public class AblationRunner
 	{
 		for(String variantName: variantNames)
 		{
-			if(AblationPolicyFactory.PHASE9_GRAPH_PLUS_VM_ATTENTION.equals(variantName)
-					|| AblationPolicyFactory.PHASE9_GRAPH_PLUS_MLP_VM.equals(variantName)
-					|| AblationPolicyFactory.PHASE9_MLP_TASK_PLUS_VM_ATTENTION.equals(variantName)
-					|| AblationPolicyFactory.PHASE10B_GRAPH_PLUS_VM_TRANSFORMER.equals(variantName)
-					|| AblationPolicyFactory.PHASE10B_MLP_TASK_PLUS_VM_TRANSFORMER.equals(variantName))
+			if(usesContextualReplay(variantName))
 			{
 				return true;
 			}
@@ -201,12 +279,17 @@ public class AblationRunner
 		private final double l2;
 		private final double epsilon;
 		private final long seed;
+		private final boolean balancedFamilies;
+		private final String balanceStrategy;
+		private final boolean normalizedComparison;
+		private final double normalizationEpsilon;
 		private final Path outputRoot;
 
 		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, List<String> variants,
 				boolean includeHeuristic, int epochs,
 				int taskHiddenSize, int graphHiddenSize, int vmHiddenSize, int graphLayers, double learningRate,
-				double l2, double epsilon, long seed, Path outputRoot)
+				double l2, double epsilon, long seed, boolean balancedFamilies, String balanceStrategy,
+				boolean normalizedComparison, double normalizationEpsilon, Path outputRoot)
 		{
 			this.trainSuite = trainSuite;
 			this.evalSuite = evalSuite;
@@ -221,6 +304,10 @@ public class AblationRunner
 			this.l2 = l2;
 			this.epsilon = epsilon;
 			this.seed = seed;
+			this.balancedFamilies = balancedFamilies;
+			this.balanceStrategy = balanceStrategy;
+			this.normalizedComparison = normalizedComparison;
+			this.normalizationEpsilon = normalizationEpsilon;
 			this.outputRoot = outputRoot;
 		}
 
@@ -249,6 +336,16 @@ public class AblationRunner
 			hyperParameters.put("seed", seed);
 			hyperParameters.put("trainSuiteName", trainSuite.getSuiteName());
 			hyperParameters.put("evalSuiteName", evalSuite.getSuiteName());
+			if(balancedFamilies)
+			{
+				hyperParameters.put("balancedFamilies", Boolean.TRUE);
+				hyperParameters.put("balanceStrategy", balanceStrategy);
+			}
+			if(normalizedComparison)
+			{
+				hyperParameters.put("normalizedComparison", Boolean.TRUE);
+				hyperParameters.put("normalizationEpsilon", normalizationEpsilon);
+			}
 			return hyperParameters;
 		}
 
@@ -268,6 +365,10 @@ public class AblationRunner
 			double l2 = 0.0001;
 			double epsilon = 0.0;
 			long seed = 20260420L;
+			boolean balancedFamilies = false;
+			String balanceStrategy = ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA;
+			boolean normalizedComparison = false;
+			double normalizationEpsilon = 1e-9;
 			Path outputRoot = Paths.get("learning-artifacts");
 
 			for(int index = 0; index < args.length; index++)
@@ -351,6 +452,24 @@ public class AblationRunner
 					index++;
 					seed = Long.parseLong(args[index]);
 				}
+				else if("--balanced-families".equals(arg))
+				{
+					balancedFamilies = true;
+				}
+				else if("--balance-strategy".equals(arg))
+				{
+					index++;
+					balanceStrategy = args[index];
+				}
+				else if("--normalized-comparison".equals(arg))
+				{
+					normalizedComparison = true;
+				}
+				else if("--normalization-epsilon".equals(arg))
+				{
+					index++;
+					normalizationEpsilon = Double.parseDouble(args[index]);
+				}
 				else if("--out".equals(arg))
 				{
 					index++;
@@ -369,11 +488,16 @@ public class AblationRunner
 					throw new IllegalArgumentException("Unsupported ablation variant: " + variant);
 				}
 			}
+			if(!ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA.equals(balanceStrategy))
+			{
+				throw new IllegalArgumentException("Unsupported balance strategy: " + balanceStrategy);
+			}
 
 			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
 			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
 			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, variants, includeHeuristic, epochs, taskHiddenSize,
-					graphHiddenSize, vmHiddenSize, graphLayers, learningRate, l2, epsilon, seed, outputRoot);
+					graphHiddenSize, vmHiddenSize, graphLayers, learningRate, l2, epsilon, seed,
+					balancedFamilies, balanceStrategy, normalizedComparison, normalizationEpsilon, outputRoot);
 		}
 	}
 }

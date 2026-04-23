@@ -129,6 +129,20 @@ java -cp "bin:Lib/*:ComparisonAlgorithm" main.GraphAttentionLearningRunner --sui
 java -cp "bin:Lib/*:ComparisonAlgorithm" main.AblationRunner --suite bench-cybershake-small
 ```
 
+## Family-Balanced Mixed Training
+
+Family-balanced replay is a training-time option. It does not modify any benchmark workload file and it remains disabled by default.
+
+Use the minimum positive family sample count as the balancing quota:
+
+```bash
+java -cp "bin:Lib/*:ComparisonAlgorithm" main.LearningRunner --train-suite bench-mixed-small --eval-suite bench-cybershake-small --balanced-families --balance-strategy min-quota
+java -cp "bin:Lib/*:ComparisonAlgorithm" main.GraphAttentionLearningRunner --train-suite bench-mixed-small --eval-suite bench-sipht-small --balanced-families --balance-strategy min-quota
+java -cp "bin:Lib/*:ComparisonAlgorithm" main.AblationRunner --train-suite bench-mixed-small --eval-suite bench-cybershake-small --variants phase8_mlp --balanced-families --balance-strategy min-quota
+```
+
+When balancing is enabled, artifacts record before/after family counts, balancing mode, strategy, and target quota per family.
+
 Mixed benchmark train and single benchmark eval:
 
 ```bash
@@ -145,4 +159,23 @@ java -cp "bin:Lib/*:ComparisonAlgorithm" main.GraphAttentionLearningRunner --tra
 java -cp "bin:Lib/*:ComparisonAlgorithm" main.AblationRunner --train-suite bench-mixed-small --eval-suite bench-mixed-medium
 ```
 
-Each run keeps the existing artifact directory layout and records benchmark family provenance in replay summaries, training summaries, and manifests.
+## Normalized Comparison
+
+Normalized comparison is also explicit and disabled by default. It adds cross-family relative deltas without changing the default reward definition.
+
+```bash
+java -cp "bin:Lib/*:ComparisonAlgorithm" main.LearningRunner --train-suite bench-mixed-small --eval-suite bench-cybershake-small --balanced-families --normalized-comparison
+java -cp "bin:Lib/*:ComparisonAlgorithm" main.GraphAttentionLearningRunner --train-suite bench-mixed-small --eval-suite bench-sipht-small --balanced-families --normalized-comparison
+java -cp "bin:Lib/*:ComparisonAlgorithm" main.AblationRunner --train-suite bench-mixed-small --eval-suite bench-cybershake-small --variants phase8_mlp --balanced-families --normalized-comparison
+```
+
+When enabled, `comparison.json` adds:
+
+- `normalizedCostDelta`
+- `normalizedViolationCountDelta`
+- `normalizedViolationTimeDelta`
+- `normalizedMakespanDelta`
+
+The normalization reference is the expert / baseline evaluation on the eval suite. Zero or near-zero expert references are handled with an epsilon floor so the output avoids `NaN` and `Infinity`.
+
+Each run keeps the existing artifact directory layout and records benchmark family provenance, optional replay balancing summaries, and optional normalized comparison analysis in artifacts and manifests.

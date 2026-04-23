@@ -28,6 +28,14 @@ public class LearningRunner
 		LearningExperimentSupport.ExpertReplayData evalReferenceExpertReplayData =
 				LearningExperimentSupport.collectReferenceExpertReplay(
 						options.trainSuite, trainExpertReplayData, options.evalSuite);
+		LearningExperimentSupport.ReplayPreparation replayPreparation =
+				LearningExperimentSupport.prepareReplayForTraining(
+						options.trainSuite,
+						trainExpertReplayData.getFlatReplayBuffer(),
+						null,
+						options.balancedFamilies,
+						options.balanceStrategy,
+						options.seed);
 
 		OfflineWarmStartTrainer trainer = new OfflineWarmStartTrainer(
 				options.taskHiddenSize,
@@ -42,7 +50,7 @@ public class LearningRunner
 		OfflineWarmStartResult trainingResult;
 		try(EpochMetricsLogger epochLogger = LearningExperimentSupport.newEpochLogger(runDirectory))
 		{
-			trainingResult = trainer.train(trainExpertReplayData.getFlatReplayBuffer(),
+			trainingResult = trainer.train(replayPreparation.getFlatReplayBuffer(),
 					(epoch, trainingMetrics, baselinePolicy, hierarchicalPolicy) ->
 					{
 						try
@@ -67,7 +75,17 @@ public class LearningRunner
 						trainingResult.getPolicy());
 		ExperimentMetrics learnedMetrics = learnedResult.getMetrics();
 
-		Map<String, Object> trainingSummary = telemetry.enrichSummary(trainingResult.getSummary());
+		Map<String, Object> comparison = ScheduleAgorithm.ComparisonSummaryWriter.buildComparison(
+				evalReferenceExpertReplayData.getExpertMetrics(),
+				learnedResult.getMetrics(),
+				evalReferenceExpertReplayData.getExpertReward(),
+				learnedResult.getReward(),
+				options.normalizedComparison,
+				options.normalizationEpsilon);
+		Map<String, Object> trainingSummary = LearningExperimentSupport.enrichTrainingSummary(
+				telemetry.enrichSummary(trainingResult.getSummary()),
+				replayPreparation.getReplayBalancingSummary(),
+				ScheduleAgorithm.ComparisonSummaryWriter.buildNormalizedComparisonSummary(comparison));
 		Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 				"PHASE8_HIERARCHICAL_WARM_START",
 				options.trainSuite,
@@ -76,15 +94,20 @@ public class LearningRunner
 				OffsetDateTime.now().toString(),
 				options.toHyperParameters(),
 				trainExpertReplayData,
-				evalReferenceExpertReplayData);
+				evalReferenceExpertReplayData,
+				replayPreparation.getReplayBalancingSummary(),
+				LearningExperimentSupport.buildAnalysisOptions(
+						options.normalizedComparison, options.normalizationEpsilon));
 
 		LearningExperimentSupport.writeArtifacts(
 				runDirectory,
 				evalReferenceExpertReplayData,
-				LearningExperimentSupport.buildReplaySummary(trainExpertReplayData.getFlatReplayBuffer(), null),
+				LearningExperimentSupport.buildReplaySummary(
+						trainExpertReplayData.getFlatReplayBuffer(), null, replayPreparation.getReplayBalancingSummary()),
 				trainingSummary,
 				telemetry,
 				learnedResult,
+				comparison,
 				manifest);
 
 		System.out.println("Phase 8 learning run completed: " + runDirectory.toString());
@@ -105,11 +128,16 @@ public class LearningRunner
 		private final double l2;
 		private final double epsilon;
 		private final long seed;
+		private final boolean balancedFamilies;
+		private final String balanceStrategy;
+		private final boolean normalizedComparison;
+		private final double normalizationEpsilon;
 		private final Path outputRoot;
 
 		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, int epochs, int taskHiddenSize,
 				int vmHiddenSize,
-				double learningRate, double l2, double epsilon, long seed, Path outputRoot)
+				double learningRate, double l2, double epsilon, long seed, boolean balancedFamilies,
+				String balanceStrategy, boolean normalizedComparison, double normalizationEpsilon, Path outputRoot)
 		{
 			this.trainSuite = trainSuite;
 			this.evalSuite = evalSuite;
@@ -120,6 +148,10 @@ public class LearningRunner
 			this.l2 = l2;
 			this.epsilon = epsilon;
 			this.seed = seed;
+			this.balancedFamilies = balancedFamilies;
+			this.balanceStrategy = balanceStrategy;
+			this.normalizedComparison = normalizedComparison;
+			this.normalizationEpsilon = normalizationEpsilon;
 			this.outputRoot = outputRoot;
 		}
 
@@ -135,6 +167,10 @@ public class LearningRunner
 			double l2 = 0.0001;
 			double epsilon = 0.0;
 			long seed = 20260420L;
+			boolean balancedFamilies = false;
+			String balanceStrategy = ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA;
+			boolean normalizedComparison = false;
+			double normalizationEpsilon = 1e-9;
 			Path outputRoot = Paths.get("learning-artifacts");
 
 			for(int index = 0; index < args.length; index++)
@@ -190,6 +226,24 @@ public class LearningRunner
 					index++;
 					seed = Long.parseLong(args[index]);
 				}
+				else if("--balanced-families".equals(arg))
+				{
+					balancedFamilies = true;
+				}
+				else if("--balance-strategy".equals(arg))
+				{
+					index++;
+					balanceStrategy = args[index];
+				}
+				else if("--normalized-comparison".equals(arg))
+				{
+					normalizedComparison = true;
+				}
+				else if("--normalization-epsilon".equals(arg))
+				{
+					index++;
+					normalizationEpsilon = Double.parseDouble(args[index]);
+				}
 				else if("--out".equals(arg))
 				{
 					index++;
@@ -201,10 +255,16 @@ public class LearningRunner
 				}
 			}
 
+			if(!ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA.equals(balanceStrategy))
+			{
+				throw new IllegalArgumentException("Unsupported balance strategy: " + balanceStrategy);
+			}
+
 			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
 			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
 			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, epochs, taskHiddenSize, vmHiddenSize,
-					learningRate, l2, epsilon, seed, outputRoot);
+					learningRate, l2, epsilon, seed, balancedFamilies, balanceStrategy, normalizedComparison,
+					normalizationEpsilon, outputRoot);
 		}
 
 		private Map<String, Object> toHyperParameters()
@@ -220,6 +280,16 @@ public class LearningRunner
 			hyperParameters.put("seed", seed);
 			hyperParameters.put("trainSuiteName", trainSuite.getSuiteName());
 			hyperParameters.put("evalSuiteName", evalSuite.getSuiteName());
+			if(balancedFamilies)
+			{
+				hyperParameters.put("balancedFamilies", Boolean.TRUE);
+				hyperParameters.put("balanceStrategy", balanceStrategy);
+			}
+			if(normalizedComparison)
+			{
+				hyperParameters.put("normalizedComparison", Boolean.TRUE);
+				hyperParameters.put("normalizationEpsilon", normalizationEpsilon);
+			}
 			return hyperParameters;
 		}
 	}

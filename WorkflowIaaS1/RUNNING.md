@@ -57,3 +57,5 @@ Generate benchmark-only workload files without touching `ExperimentalWorkflow.da
 - Benchmark workload generator: `workflow.BenchmarkWorkflowGenerator`
 - If you change `share.StaticfinalTags`, rerun the generator before running the experiment.
 - Benchmark setup and benchmark runner commands are documented in `BENCHMARKS.md`.
+- Phase 11-prep examples for `--balanced-families`, `--balance-strategy min-quota`, and `--normalized-comparison`
+  are documented in `BENCHMARKS.md`.

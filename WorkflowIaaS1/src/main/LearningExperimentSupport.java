@@ -26,6 +26,7 @@ import ScheduleAgorithm.JsonSupport;
 import ScheduleAgorithm.NOSF_Algorithms;
 import ScheduleAgorithm.NoOpSchedulingTraceRecorder;
 import ScheduleAgorithm.RegressionSuite;
+import ScheduleAgorithm.ReplayBalancingSupport;
 import ScheduleAgorithm.SchedulingAction;
 import ScheduleAgorithm.SchedulingPolicy;
 import ScheduleAgorithm.SchedulingTraceRecorder;
@@ -39,6 +40,7 @@ import ScheduleAgorithm.ResourceSelection;
 import ScheduleAgorithm.WorkloadFingerprint;
 import share.StaticfinalTags;
 import vmInfo.SaaSVm;
+import workflow.BenchmarkFamily;
 import workflow.WTask;
 import workflow.Workflow;
 import workflow.WorkflowDatasetIO;
@@ -134,7 +136,8 @@ final class LearningExperimentSupport
 
 	static Map<String, Object> buildManifest(String algorithmName, RegressionSuite trainSuite, RegressionSuite evalSuite,
 			String startedAt, String finishedAt, Map<String, Object> hyperParameters,
-			ExpertReplayData trainExpertReplayData, ExpertReplayData evalExpertReplayData) throws IOException
+			ExpertReplayData trainExpertReplayData, ExpertReplayData evalExpertReplayData,
+			Map<String, Object> replayBalancing, Map<String, Object> analysisOptions) throws IOException
 	{
 		GitMetadata gitMetadata = GitMetadata.read();
 		Path trainWorkloadPath = requireWorkloadPath(trainSuite);
@@ -148,6 +151,14 @@ final class LearningExperimentSupport
 		config.put("evalDataset", evalDataset);
 		config.put("hyperParameters", hyperParameters);
 		config.put("staticTags", staticTags);
+		if(replayBalancing != null)
+		{
+			config.put("replayBalancing", replayBalancing);
+		}
+		if(analysisOptions != null)
+		{
+			config.put("analysisOptions", analysisOptions);
+		}
 
 		Map<String, Object> manifest = new LinkedHashMap<String, Object>();
 		manifest.put("algorithmName", algorithmName);
@@ -165,6 +176,14 @@ final class LearningExperimentSupport
 		manifest.put("hyperParameters", hyperParameters);
 		manifest.put("trainDataset", trainDataset);
 		manifest.put("evalDataset", evalDataset);
+		if(replayBalancing != null)
+		{
+			manifest.put("replayBalancing", replayBalancing);
+		}
+		if(analysisOptions != null)
+		{
+			manifest.put("analysisOptions", analysisOptions);
+		}
 		manifest.put("configHash",
 				WorkloadFingerprint.sha256(JsonSupport.toJson(config).getBytes(StandardCharsets.UTF_8)));
 		return manifest;
@@ -172,12 +191,9 @@ final class LearningExperimentSupport
 
 	static void writeArtifacts(Path runDirectory, ExpertReplayData referenceExpertReplayData,
 			Map<String, Object> replaySummary, Map<String, Object> trainingSummary, TrainingTelemetry telemetry,
-			EvaluationResult learnedResult, Map<String, Object> manifest) throws IOException
+			EvaluationResult learnedResult, Map<String, Object> comparison, Map<String, Object> manifest)
+			throws IOException
 	{
-		Map<String, Object> comparison = ComparisonSummaryWriter.buildComparison(
-				referenceExpertReplayData.getExpertMetrics(), learnedResult.getMetrics(),
-				referenceExpertReplayData.getExpertReward(), learnedResult.getReward());
-
 		JsonSupport.writeJson(runDirectory.resolve("expert-metrics.json"),
 				referenceExpertReplayData.getExpertMetrics().toMap());
 		JsonSupport.writeJson(runDirectory.resolve("expert-reward.json"),
@@ -192,7 +208,7 @@ final class LearningExperimentSupport
 	}
 
 	static Map<String, Object> buildReplaySummary(HierarchicalReplayBuffer flatReplay,
-			ContextualHierarchicalReplayBuffer contextualReplay)
+			ContextualHierarchicalReplayBuffer contextualReplay, Map<String, Object> replayBalancing)
 	{
 		Map<String, Object> summary = new LinkedHashMap<String, Object>();
 		if(flatReplay != null)
@@ -203,7 +219,96 @@ final class LearningExperimentSupport
 		{
 			summary.put("contextualReplay", contextualReplay.toSummary());
 		}
+		if(replayBalancing != null)
+		{
+			summary.put("replayBalancing", replayBalancing);
+		}
 		return summary;
+	}
+
+	static ReplayPreparation prepareReplayForTraining(RegressionSuite trainSuite,
+			HierarchicalReplayBuffer flatReplay, ContextualHierarchicalReplayBuffer contextualReplay,
+			boolean balancedFamilies, String balanceStrategy, long seed)
+	{
+		if(!balancedFamilies)
+		{
+			return new ReplayPreparation(flatReplay, contextualReplay, null);
+		}
+
+		ReplayBalancingSupport.BalanceOptions balanceOptions = new ReplayBalancingSupport.BalanceOptions(
+				true, balanceStrategy, seed, expectedFamilyNames(trainSuite));
+		HierarchicalReplayBuffer preparedFlatReplay = flatReplay;
+		ContextualHierarchicalReplayBuffer preparedContextualReplay = contextualReplay;
+		Map<String, Object> replayBalancing = new LinkedHashMap<String, Object>();
+		replayBalancing.put("enabled", Boolean.TRUE);
+		replayBalancing.put("mode", "family-balanced");
+		replayBalancing.put("strategy", balanceStrategy);
+		replayBalancing.put("seed", Long.valueOf(seed));
+
+		boolean hasReplay = false;
+		if(flatReplay != null)
+		{
+			hasReplay = true;
+			ReplayBalancingSupport.BalanceResult<HierarchicalReplayBuffer> flatResult =
+					ReplayBalancingSupport.balanceFlatReplay(flatReplay, balanceOptions);
+			preparedFlatReplay = flatResult.getReplayBuffer();
+			replayBalancing.put("flat", flatResult.getSummary());
+		}
+		if(contextualReplay != null)
+		{
+			hasReplay = true;
+			ReplayBalancingSupport.BalanceResult<ContextualHierarchicalReplayBuffer> contextualResult =
+					ReplayBalancingSupport.balanceContextualReplay(contextualReplay, balanceOptions);
+			preparedContextualReplay = contextualResult.getReplayBuffer();
+			replayBalancing.put("contextual", contextualResult.getSummary());
+		}
+		if(!hasReplay)
+		{
+			replayBalancing.putAll(ReplayBalancingSupport.buildNotApplicableSummary(balanceOptions,
+					"no-replay-buffer-available"));
+		}
+		return new ReplayPreparation(preparedFlatReplay, preparedContextualReplay, replayBalancing);
+	}
+
+	static Map<String, Object> enrichTrainingSummary(Map<String, Object> trainingSummary,
+			Map<String, Object> replayBalancing, Map<String, Object> normalizedComparison)
+	{
+		Map<String, Object> summary = new LinkedHashMap<String, Object>(trainingSummary);
+		if(replayBalancing != null)
+		{
+			summary.put("replayBalancing", replayBalancing);
+		}
+		if(normalizedComparison != null)
+		{
+			summary.put("normalizedComparison", normalizedComparison);
+		}
+		return summary;
+	}
+
+	static Map<String, Object> buildAnalysisOptions(boolean normalizedComparisonEnabled, double normalizationEpsilon)
+	{
+		if(!normalizedComparisonEnabled)
+		{
+			return null;
+		}
+		double safeEpsilon = normalizationEpsilon > 0.0 ? normalizationEpsilon : 1e-9;
+
+		Map<String, Object> normalizedComparison = new LinkedHashMap<String, Object>();
+		normalizedComparison.put("enabled", Boolean.TRUE);
+		normalizedComparison.put("reference", "expert");
+		normalizedComparison.put("epsilon", Double.valueOf(safeEpsilon));
+		normalizedComparison.put("denominatorRule", "max(abs(reference), epsilon)");
+		normalizedComparison.put("zeroReferenceHandling", "epsilon-floor");
+
+		Map<String, Object> analysisOptions = new LinkedHashMap<String, Object>();
+		analysisOptions.put("normalizedComparison", normalizedComparison);
+		return analysisOptions;
+	}
+
+	static Map<String, Object> buildNotApplicableReplayBalancing(String balanceStrategy, long seed, String reason)
+	{
+		return ReplayBalancingSupport.buildNotApplicableSummary(
+				new ReplayBalancingSupport.BalanceOptions(true, balanceStrategy, seed, null), reason);
 	}
 
 	private static Map<String, Object> buildDatasetMetadata(RegressionSuite suite, Path workloadPath,
@@ -214,6 +319,16 @@ final class LearningExperimentSupport
 				Integer.valueOf(expertReplayData.getExpertMetrics().getTotalTaskCount()));
 		metadata.put("workloadFingerprint", WorkloadFingerprint.fromFile(workloadPath));
 		return metadata;
+	}
+
+	private static List<String> expectedFamilyNames(RegressionSuite suite)
+	{
+		List<String> familyNames = new ArrayList<String>();
+		for(BenchmarkFamily benchmarkFamily: suite.getBenchmarkFamilies())
+		{
+			familyNames.add(benchmarkFamily.getFamilyName());
+		}
+		return familyNames;
 	}
 
 	static void validateContextualReplay(ContextualHierarchicalReplayBuffer replayBuffer)
@@ -348,6 +463,37 @@ final class LearningExperimentSupport
 		ContextualHierarchicalReplayBuffer getContextualReplayBuffer()
 		{
 			return contextualReplayBuffer;
+		}
+	}
+
+	static final class ReplayPreparation
+	{
+		private final HierarchicalReplayBuffer flatReplayBuffer;
+		private final ContextualHierarchicalReplayBuffer contextualReplayBuffer;
+		private final Map<String, Object> replayBalancingSummary;
+
+		private ReplayPreparation(HierarchicalReplayBuffer flatReplayBuffer,
+				ContextualHierarchicalReplayBuffer contextualReplayBuffer,
+				Map<String, Object> replayBalancingSummary)
+		{
+			this.flatReplayBuffer = flatReplayBuffer;
+			this.contextualReplayBuffer = contextualReplayBuffer;
+			this.replayBalancingSummary = replayBalancingSummary;
+		}
+
+		HierarchicalReplayBuffer getFlatReplayBuffer()
+		{
+			return flatReplayBuffer;
+		}
+
+		ContextualHierarchicalReplayBuffer getContextualReplayBuffer()
+		{
+			return contextualReplayBuffer;
+		}
+
+		Map<String, Object> getReplayBalancingSummary()
+		{
+			return replayBalancingSummary;
 		}
 	}
 
