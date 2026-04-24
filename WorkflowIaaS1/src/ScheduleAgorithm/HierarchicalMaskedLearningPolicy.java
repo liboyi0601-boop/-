@@ -16,6 +16,7 @@ public final class HierarchicalMaskedLearningPolicy implements SchedulingPolicy,
 	private final SimpleTwoLayerScorer vmScorer;
 	private final Random explorationRandom;
 	private final double epsilon;
+	private final long seed;
 
 	public HierarchicalMaskedLearningPolicy(SimpleTwoLayerScorer taskScorer, SimpleTwoLayerScorer vmScorer,
 			double epsilon, long seed)
@@ -26,7 +27,13 @@ public final class HierarchicalMaskedLearningPolicy implements SchedulingPolicy,
 		this.taskScorer = taskScorer;
 		this.vmScorer = vmScorer;
 		this.epsilon = epsilon;
+		this.seed = seed;
 		this.explorationRandom = new Random(seed);
+	}
+
+	public HierarchicalMaskedLearningPolicy copy()
+	{
+		return new HierarchicalMaskedLearningPolicy(taskScorer.copy(), vmScorer.copy(), epsilon, seed);
 	}
 
 	public SchedulingAction selectAction(WTask task, List<SaaSVm> vmList)

@@ -4,10 +4,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
+import ScheduleAgorithm.ConstraintFirstCheckpointSelector;
 import ScheduleAgorithm.EpochMetricsLogger;
 import ScheduleAgorithm.ExperimentMetrics;
+import ScheduleAgorithm.HierarchicalMaskedLearningPolicy;
+import ScheduleAgorithm.JsonSupport;
 import ScheduleAgorithm.OfflineWarmStartResult;
 import ScheduleAgorithm.OfflineWarmStartTrainer;
 import ScheduleAgorithm.RegressionSuite;
@@ -47,6 +51,9 @@ public class LearningRunner
 				options.seed);
 
 		TrainingTelemetry telemetry = new TrainingTelemetry("imitation");
+		final ConstraintFirstCheckpointSelector checkpointSelector = options.isCheckpointSelectionEnabled()
+				? new ConstraintFirstCheckpointSelector()
+				: null;
 		OfflineWarmStartResult trainingResult;
 		try(EpochMetricsLogger epochLogger = LearningExperimentSupport.newEpochLogger(runDirectory))
 		{
@@ -59,6 +66,19 @@ public class LearningRunner
 									LearningExperimentSupport.evaluate(evalWorkloadPath, baselinePolicy, hierarchicalPolicy);
 							LearningExperimentSupport.logEpoch(epochLogger, telemetry, epoch,
 									trainingMetrics, epochEvaluation);
+							if(checkpointSelector != null)
+							{
+								if(!(hierarchicalPolicy instanceof HierarchicalMaskedLearningPolicy))
+								{
+									throw new IllegalStateException("Phase 8 checkpoint selection requires "
+											+ "HierarchicalMaskedLearningPolicy, actual="
+											+ hierarchicalPolicy.getClass().getName());
+								}
+								checkpointSelector.consider(epoch, (HierarchicalMaskedLearningPolicy)hierarchicalPolicy,
+										epochEvaluation.getMetrics(), epochEvaluation.getReward(),
+										epochEvaluation.getInvalidTaskActionCount(),
+										epochEvaluation.getInvalidVmActionCount());
+							}
 						}
 						catch(Exception exception)
 						{
@@ -82,10 +102,42 @@ public class LearningRunner
 				learnedResult.getReward(),
 				options.normalizedComparison,
 				options.normalizationEpsilon);
+		LearningExperimentSupport.EvaluationResult bestCheckpointResult = null;
+		Map<String, Object> checkpointSummary = null;
+		if(checkpointSelector != null)
+		{
+			if(!checkpointSelector.hasBestCheckpoint())
+			{
+				throw new IllegalStateException("Checkpoint selection was enabled but no checkpoint was selected");
+			}
+			bestCheckpointResult = LearningExperimentSupport.evaluate(
+					evalWorkloadPath,
+					checkpointSelector.getBestPolicy(),
+					checkpointSelector.getBestPolicy());
+			Map<String, Object> bestCheckpointComparison = ScheduleAgorithm.ComparisonSummaryWriter.buildComparison(
+					evalReferenceExpertReplayData.getExpertMetrics(),
+					bestCheckpointResult.getMetrics(),
+					evalReferenceExpertReplayData.getExpertReward(),
+					bestCheckpointResult.getReward(),
+					options.normalizedComparison,
+					options.normalizationEpsilon);
+			comparison.put("bestCheckpointComparison", bestCheckpointComparison);
+			checkpointSummary = checkpointSelector.buildSummary(
+					copyFinalEpochMetrics(telemetry),
+					bestCheckpointResult.getMetrics(),
+					bestCheckpointResult.getReward(),
+					bestCheckpointResult.getInvalidTaskActionCount(),
+					bestCheckpointResult.getInvalidVmActionCount(),
+					bestCheckpointComparison);
+		}
 		Map<String, Object> trainingSummary = LearningExperimentSupport.enrichTrainingSummary(
 				telemetry.enrichSummary(trainingResult.getSummary()),
 				replayPreparation.getReplayBalancingSummary(),
 				ScheduleAgorithm.ComparisonSummaryWriter.buildNormalizedComparisonSummary(comparison));
+		if(checkpointSummary != null)
+		{
+			enrichTrainingSummaryWithCheckpoint(trainingSummary, checkpointSummary);
+		}
 		Map<String, Object> manifest = LearningExperimentSupport.buildManifest(
 				"PHASE8_HIERARCHICAL_WARM_START",
 				options.trainSuite,
@@ -98,6 +150,15 @@ public class LearningRunner
 				replayPreparation.getReplayBalancingSummary(),
 				LearningExperimentSupport.buildAnalysisOptions(
 						options.normalizedComparison, options.normalizationEpsilon));
+		if(options.isCheckpointSelectionEnabled())
+		{
+			manifest.put("checkpointSelectionEnabled", Boolean.TRUE);
+			manifest.put("checkpointSelectionRule", options.checkpointSelection);
+			if(checkpointSummary != null)
+			{
+				manifest.put("bestCheckpointEpoch", checkpointSummary.get("bestCheckpointEpoch"));
+			}
+		}
 
 		LearningExperimentSupport.writeArtifacts(
 				runDirectory,
@@ -109,6 +170,14 @@ public class LearningRunner
 				learnedResult,
 				comparison,
 				manifest);
+		if(checkpointSummary != null && bestCheckpointResult != null)
+		{
+			JsonSupport.writeJson(runDirectory.resolve("checkpoint-summary.json"), checkpointSummary);
+			JsonSupport.writeJson(runDirectory.resolve("best-learned-metrics.json"),
+					bestCheckpointResult.getMetrics().toMap());
+			JsonSupport.writeJson(runDirectory.resolve("best-learned-reward.json"),
+					bestCheckpointResult.getReward());
+		}
 
 		System.out.println("Phase 8 learning run completed: " + runDirectory.toString());
 		System.out.println("Expert totalCost=" + evalReferenceExpertReplayData.getExpertMetrics().getTotalCost()
@@ -117,8 +186,31 @@ public class LearningRunner
 				+ " learned reward=" + learnedResult.getReward().get("totalReward"));
 	}
 
+	private static Map<String, Object> copyFinalEpochMetrics(TrainingTelemetry telemetry)
+	{
+		List<Map<String, Object>> epochMetrics = telemetry.getEpochMetrics();
+		if(epochMetrics.isEmpty())
+		{
+			return null;
+		}
+		return new LinkedHashMap<String, Object>(epochMetrics.get(epochMetrics.size() - 1));
+	}
+
+	private static void enrichTrainingSummaryWithCheckpoint(Map<String, Object> trainingSummary,
+			Map<String, Object> checkpointSummary)
+	{
+		trainingSummary.put("checkpointSelectionEnabled", Boolean.TRUE);
+		trainingSummary.put("selectionRule", checkpointSummary.get("selectionRule"));
+		trainingSummary.put("bestCheckpointEpoch", checkpointSummary.get("bestCheckpointEpoch"));
+		trainingSummary.put("bestCheckpointReason", checkpointSummary.get("bestCheckpointReason"));
+		trainingSummary.put("bestCheckpointMetrics", checkpointSummary.get("bestCheckpointMetrics"));
+		trainingSummary.put("finalEpochMetrics", checkpointSummary.get("finalEpochMetrics"));
+	}
+
 	private static final class RunnerOptions
 	{
+		private static final String CHECKPOINT_SELECTION_NONE = "none";
+
 		private final RegressionSuite trainSuite;
 		private final RegressionSuite evalSuite;
 		private final int epochs;
@@ -132,12 +224,14 @@ public class LearningRunner
 		private final String balanceStrategy;
 		private final boolean normalizedComparison;
 		private final double normalizationEpsilon;
+		private final String checkpointSelection;
 		private final Path outputRoot;
 
 		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, int epochs, int taskHiddenSize,
 				int vmHiddenSize,
 				double learningRate, double l2, double epsilon, long seed, boolean balancedFamilies,
-				String balanceStrategy, boolean normalizedComparison, double normalizationEpsilon, Path outputRoot)
+				String balanceStrategy, boolean normalizedComparison, double normalizationEpsilon,
+				String checkpointSelection, Path outputRoot)
 		{
 			this.trainSuite = trainSuite;
 			this.evalSuite = evalSuite;
@@ -152,6 +246,7 @@ public class LearningRunner
 			this.balanceStrategy = balanceStrategy;
 			this.normalizedComparison = normalizedComparison;
 			this.normalizationEpsilon = normalizationEpsilon;
+			this.checkpointSelection = checkpointSelection;
 			this.outputRoot = outputRoot;
 		}
 
@@ -171,6 +266,7 @@ public class LearningRunner
 			String balanceStrategy = ScheduleAgorithm.ReplayBalancingSupport.STRATEGY_MIN_QUOTA;
 			boolean normalizedComparison = false;
 			double normalizationEpsilon = 1e-9;
+			String checkpointSelection = CHECKPOINT_SELECTION_NONE;
 			Path outputRoot = Paths.get("learning-artifacts");
 
 			for(int index = 0; index < args.length; index++)
@@ -244,6 +340,11 @@ public class LearningRunner
 					index++;
 					normalizationEpsilon = Double.parseDouble(args[index]);
 				}
+				else if("--checkpoint-selection".equals(arg))
+				{
+					index++;
+					checkpointSelection = args[index];
+				}
 				else if("--out".equals(arg))
 				{
 					index++;
@@ -259,12 +360,22 @@ public class LearningRunner
 			{
 				throw new IllegalArgumentException("Unsupported balance strategy: " + balanceStrategy);
 			}
+			if(!CHECKPOINT_SELECTION_NONE.equals(checkpointSelection)
+					&& !ConstraintFirstCheckpointSelector.RULE_NAME.equals(checkpointSelection))
+			{
+				throw new IllegalArgumentException("Unsupported checkpoint selection: " + checkpointSelection);
+			}
 
 			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
 			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
 			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, epochs, taskHiddenSize, vmHiddenSize,
-					learningRate, l2, epsilon, seed, balancedFamilies, balanceStrategy, normalizedComparison,
-					normalizationEpsilon, outputRoot);
+					learningRate, l2, epsilon, seed, balancedFamilies, balanceStrategy,
+					normalizedComparison, normalizationEpsilon, checkpointSelection, outputRoot);
+		}
+
+		private boolean isCheckpointSelectionEnabled()
+		{
+			return ConstraintFirstCheckpointSelector.RULE_NAME.equals(checkpointSelection);
 		}
 
 		private Map<String, Object> toHyperParameters()
@@ -289,6 +400,10 @@ public class LearningRunner
 			{
 				hyperParameters.put("normalizedComparison", Boolean.TRUE);
 				hyperParameters.put("normalizationEpsilon", normalizationEpsilon);
+			}
+			if(isCheckpointSelectionEnabled())
+			{
+				hyperParameters.put("checkpointSelection", checkpointSelection);
 			}
 			return hyperParameters;
 		}

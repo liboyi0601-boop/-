@@ -22,6 +22,23 @@ public final class SimpleTwoLayerScorer
 		initialize(random);
 	}
 
+	private SimpleTwoLayerScorer(int inputSize, int hiddenSize, double[][] hiddenWeights,
+			double[] hiddenBias, double[] outputWeights, double outputBias)
+	{
+		this.inputSize = inputSize;
+		this.hiddenSize = hiddenSize;
+		this.hiddenWeights = copyMatrix(hiddenWeights);
+		this.hiddenBias = copyVector(hiddenBias);
+		this.outputWeights = copyVector(outputWeights);
+		this.outputBias = outputBias;
+	}
+
+	public SimpleTwoLayerScorer copy()
+	{
+		return new SimpleTwoLayerScorer(inputSize, hiddenSize, hiddenWeights,
+				hiddenBias, outputWeights, outputBias);
+	}
+
 	public double score(double[] input)
 	{
 		double score = outputBias;
@@ -194,5 +211,22 @@ public final class SimpleTwoLayerScorer
 			hidden += hiddenWeights[hiddenIndex][inputIndex] * input[inputIndex];
 		}
 		return Math.tanh(hidden);
+	}
+
+	private static double[][] copyMatrix(double[][] source)
+	{
+		double[][] copy = new double[source.length][];
+		for(int index = 0; index < source.length; index++)
+		{
+			copy[index] = copyVector(source[index]);
+		}
+		return copy;
+	}
+
+	private static double[] copyVector(double[] source)
+	{
+		double[] copy = new double[source.length];
+		System.arraycopy(source, 0, copy, 0, source.length);
+		return copy;
 	}
 }
