@@ -17,6 +17,7 @@ import ScheduleAgorithm.ComparisonSummaryWriter;
 import ScheduleAgorithm.ConstraintAwareRewardModel;
 import ScheduleAgorithm.ContextualExpertReplayCollector;
 import ScheduleAgorithm.ContextualHierarchicalReplayBuffer;
+import ScheduleAgorithm.DeadlineViolationMetrics;
 import ScheduleAgorithm.EpochMetricsLogger;
 import ScheduleAgorithm.ExperimentMetrics;
 import ScheduleAgorithm.HierarchicalSchedulingPolicy;
@@ -101,8 +102,10 @@ final class LearningExperimentSupport
 		}
 		ConstraintAwareRewardModel rewardModel = new ConstraintAwareRewardModel();
 		Map<String, Object> expertReward = rewardModel.evaluateEpisode(expertWorkflows, expertMetrics);
+		DeadlineViolationMetrics expertDeadlineMetrics =
+				DeadlineViolationMetrics.fromWorkflows(expertWorkflows, expertMetrics);
 
-		return new ExpertReplayData(expertWorkflows, expertMetrics, expertReward,
+		return new ExpertReplayData(expertWorkflows, expertMetrics, expertDeadlineMetrics, expertReward,
 				flatCollector == null ? null : flatCollector.getReplayBuffer(),
 				contextualCollector == null ? null : contextualCollector.getReplayBuffer());
 	}
@@ -127,9 +130,10 @@ final class LearningExperimentSupport
 		algorithm.ScheduleWorkflow_By_NOSF();
 
 		ExperimentMetrics metrics = ExperimentMetrics.fromWorkflows(workflows);
+		DeadlineViolationMetrics deadlineViolationMetrics = DeadlineViolationMetrics.fromWorkflows(workflows, metrics);
 		ConstraintAwareRewardModel rewardModel = new ConstraintAwareRewardModel();
 		Map<String, Object> reward = rewardModel.evaluateEpisode(workflows, metrics);
-		return new EvaluationResult(workflows, metrics, reward,
+		return new EvaluationResult(workflows, metrics, deadlineViolationMetrics, reward,
 				validationRecorder.getInvalidTaskActionCount(),
 				validationRecorder.getInvalidVmActionCount());
 	}
@@ -151,6 +155,7 @@ final class LearningExperimentSupport
 		config.put("evalDataset", evalDataset);
 		config.put("hyperParameters", hyperParameters);
 		config.put("staticTags", staticTags);
+		config.put("metricHygiene", DeadlineViolationMetrics.buildMetricHygieneMetadata());
 		if(replayBalancing != null)
 		{
 			config.put("replayBalancing", replayBalancing);
@@ -176,6 +181,7 @@ final class LearningExperimentSupport
 		manifest.put("hyperParameters", hyperParameters);
 		manifest.put("trainDataset", trainDataset);
 		manifest.put("evalDataset", evalDataset);
+		manifest.put("metricHygiene", DeadlineViolationMetrics.buildMetricHygieneMetadata());
 		if(replayBalancing != null)
 		{
 			manifest.put("replayBalancing", replayBalancing);
@@ -195,16 +201,28 @@ final class LearningExperimentSupport
 			throws IOException
 	{
 		JsonSupport.writeJson(runDirectory.resolve("expert-metrics.json"),
-				referenceExpertReplayData.getExpertMetrics().toMap());
+				buildMetricsMap(referenceExpertReplayData.getExpertMetrics(),
+						referenceExpertReplayData.getExpertDeadlineMetrics()));
 		JsonSupport.writeJson(runDirectory.resolve("expert-reward.json"),
 				referenceExpertReplayData.getExpertReward());
 		JsonSupport.writeJson(runDirectory.resolve("replay-summary.json"), replaySummary);
 		JsonSupport.writeJson(runDirectory.resolve("training-summary.json"), trainingSummary);
 		writeEpochMetrics(runDirectory.resolve("epoch-metrics.jsonl"), telemetry);
-		JsonSupport.writeJson(runDirectory.resolve("learned-metrics.json"), learnedResult.getMetrics().toMap());
+		JsonSupport.writeJson(runDirectory.resolve("learned-metrics.json"),
+				buildMetricsMap(learnedResult.getMetrics(), learnedResult.getDeadlineViolationMetrics()));
 		JsonSupport.writeJson(runDirectory.resolve("learned-reward.json"), learnedResult.getReward());
 		JsonSupport.writeJson(runDirectory.resolve("comparison.json"), comparison);
 		JsonSupport.writeJson(runDirectory.resolve("manifest.json"), manifest);
+	}
+
+	static Map<String, Object> buildMetricsMap(ExperimentMetrics metrics, DeadlineViolationMetrics deadlineMetrics)
+	{
+		Map<String, Object> map = metrics.toMap();
+		if(deadlineMetrics != null)
+		{
+			map.put(DeadlineViolationMetrics.MAP_KEY, deadlineMetrics.toMap());
+		}
+		return map;
 	}
 
 	static Map<String, Object> buildReplaySummary(HierarchicalReplayBuffer flatReplay,
@@ -274,6 +292,7 @@ final class LearningExperimentSupport
 			Map<String, Object> replayBalancing, Map<String, Object> normalizedComparison)
 	{
 		Map<String, Object> summary = new LinkedHashMap<String, Object>(trainingSummary);
+		summary.put("metricHygiene", DeadlineViolationMetrics.buildMetricHygieneMetadata());
 		if(replayBalancing != null)
 		{
 			summary.put("replayBalancing", replayBalancing);
@@ -362,6 +381,7 @@ final class LearningExperimentSupport
 			Map<String, Object> trainingMetrics, EvaluationResult evaluationResult) throws IOException
 	{
 		telemetry.recordEpoch(epoch, trainingMetrics, evaluationResult.getMetrics(),
+				evaluationResult.getDeadlineViolationMetrics(),
 				evaluationResult.getReward(), evaluationResult.getInvalidTaskActionCount(),
 				evaluationResult.getInvalidVmActionCount());
 		logger.append(telemetry.getEpochMetrics().get(telemetry.getEpochMetrics().size() - 1));
@@ -425,16 +445,18 @@ final class LearningExperimentSupport
 	{
 		private final List<Workflow> expertWorkflows;
 		private final ExperimentMetrics expertMetrics;
+		private final DeadlineViolationMetrics expertDeadlineMetrics;
 		private final Map<String, Object> expertReward;
 		private final HierarchicalReplayBuffer flatReplayBuffer;
 		private final ContextualHierarchicalReplayBuffer contextualReplayBuffer;
 
 		private ExpertReplayData(List<Workflow> expertWorkflows, ExperimentMetrics expertMetrics,
-				Map<String, Object> expertReward, HierarchicalReplayBuffer flatReplayBuffer,
-				ContextualHierarchicalReplayBuffer contextualReplayBuffer)
+				DeadlineViolationMetrics expertDeadlineMetrics, Map<String, Object> expertReward,
+				HierarchicalReplayBuffer flatReplayBuffer, ContextualHierarchicalReplayBuffer contextualReplayBuffer)
 		{
 			this.expertWorkflows = expertWorkflows;
 			this.expertMetrics = expertMetrics;
+			this.expertDeadlineMetrics = expertDeadlineMetrics;
 			this.expertReward = expertReward;
 			this.flatReplayBuffer = flatReplayBuffer;
 			this.contextualReplayBuffer = contextualReplayBuffer;
@@ -448,6 +470,11 @@ final class LearningExperimentSupport
 		ExperimentMetrics getExpertMetrics()
 		{
 			return expertMetrics;
+		}
+
+		DeadlineViolationMetrics getExpertDeadlineMetrics()
+		{
+			return expertDeadlineMetrics;
 		}
 
 		Map<String, Object> getExpertReward()
@@ -501,15 +528,18 @@ final class LearningExperimentSupport
 	{
 		private final List<Workflow> workflows;
 		private final ExperimentMetrics metrics;
+		private final DeadlineViolationMetrics deadlineViolationMetrics;
 		private final Map<String, Object> reward;
 		private final int invalidTaskActionCount;
 		private final int invalidVmActionCount;
 
-		private EvaluationResult(List<Workflow> workflows, ExperimentMetrics metrics, Map<String, Object> reward,
+		private EvaluationResult(List<Workflow> workflows, ExperimentMetrics metrics,
+				DeadlineViolationMetrics deadlineViolationMetrics, Map<String, Object> reward,
 				int invalidTaskActionCount, int invalidVmActionCount)
 		{
 			this.workflows = workflows;
 			this.metrics = metrics;
+			this.deadlineViolationMetrics = deadlineViolationMetrics;
 			this.reward = reward;
 			this.invalidTaskActionCount = invalidTaskActionCount;
 			this.invalidVmActionCount = invalidVmActionCount;
@@ -523,6 +553,11 @@ final class LearningExperimentSupport
 		ExperimentMetrics getMetrics()
 		{
 			return metrics;
+		}
+
+		DeadlineViolationMetrics getDeadlineViolationMetrics()
+		{
+			return deadlineViolationMetrics;
 		}
 
 		Map<String, Object> getReward()

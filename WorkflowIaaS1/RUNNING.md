@@ -59,3 +59,4 @@ Generate benchmark-only workload files without touching `ExperimentalWorkflow.da
 - Benchmark setup and benchmark runner commands are documented in `BENCHMARKS.md`.
 - Phase 11-prep examples for `--balanced-families`, `--balance-strategy min-quota`, and `--normalized-comparison`
   are documented in `BENCHMARKS.md`.
+- Phase 11C deadline violation metric hygiene notes are documented in `BENCHMARKS.md`; baseline default output remains unchanged.

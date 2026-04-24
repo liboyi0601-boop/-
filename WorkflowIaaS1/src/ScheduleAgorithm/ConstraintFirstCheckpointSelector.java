@@ -7,14 +7,16 @@ public final class ConstraintFirstCheckpointSelector
 {
 	public static final String RULE_NAME = "constraint-first";
 	private static final String REASON =
-			"lowest violationCount, then violationTime, then totalCost, then highest totalReward, then earliest epoch";
+			"lowest invalid action count, then violationCount, then corrected positiveViolationTimeRatio, "
+					+ "then totalCost, then highest totalReward, then earliest epoch";
 
 	private PolicyCheckpoint bestCheckpoint;
 
 	public void consider(int epoch, HierarchicalMaskedLearningPolicy policy, ExperimentMetrics metrics,
-			Map<String, Object> reward, int invalidTaskActionCount, int invalidVmActionCount)
+			DeadlineViolationMetrics deadlineMetrics, Map<String, Object> reward,
+			int invalidTaskActionCount, int invalidVmActionCount)
 	{
-		PolicyCheckpoint candidate = new PolicyCheckpoint(epoch, policy.copy(), metrics, reward,
+		PolicyCheckpoint candidate = new PolicyCheckpoint(epoch, policy.copy(), metrics, deadlineMetrics, reward,
 				invalidTaskActionCount, invalidVmActionCount);
 		if(bestCheckpoint == null || isBetter(candidate, bestCheckpoint))
 		{
@@ -40,7 +42,7 @@ public final class ConstraintFirstCheckpointSelector
 	}
 
 	public Map<String, Object> buildSummary(Map<String, Object> finalEpochMetrics,
-			ExperimentMetrics bestMetrics, Map<String, Object> bestReward,
+			ExperimentMetrics bestMetrics, DeadlineViolationMetrics bestDeadlineMetrics, Map<String, Object> bestReward,
 			int bestInvalidTaskActionCount, int bestInvalidVmActionCount,
 			Map<String, Object> bestCheckpointComparison)
 	{
@@ -50,7 +52,7 @@ public final class ConstraintFirstCheckpointSelector
 		summary.put("selectionRule", RULE_NAME);
 		summary.put("bestCheckpointEpoch", Integer.valueOf(bestCheckpoint.epoch));
 		summary.put("bestCheckpointReason", REASON);
-		summary.put("bestCheckpointMetrics", bestMetrics.toMap());
+		summary.put("bestCheckpointMetrics", metricsMap(bestMetrics, bestDeadlineMetrics));
 		summary.put("bestCheckpointReward", new LinkedHashMap<String, Object>(bestReward));
 		summary.put("bestInvalidTaskActionCount", Integer.valueOf(bestInvalidTaskActionCount));
 		summary.put("bestInvalidVmActionCount", Integer.valueOf(bestInvalidVmActionCount));
@@ -77,6 +79,12 @@ public final class ConstraintFirstCheckpointSelector
 		return new LinkedHashMap<String, Object>(bestCheckpoint.reward);
 	}
 
+	public DeadlineViolationMetrics getSelectionDeadlineMetrics()
+	{
+		requireBestCheckpoint();
+		return bestCheckpoint.deadlineMetrics;
+	}
+
 	public int getSelectionInvalidTaskActionCount()
 	{
 		requireBestCheckpoint();
@@ -96,12 +104,17 @@ public final class ConstraintFirstCheckpointSelector
 
 	private boolean isBetter(PolicyCheckpoint candidate, PolicyCheckpoint currentBest)
 	{
-		int result = Double.compare(candidate.metrics.getViolationCount(), currentBest.metrics.getViolationCount());
+		int result = Integer.compare(candidate.invalidActionCount(), currentBest.invalidActionCount());
 		if(result != 0)
 		{
 			return result < 0;
 		}
-		result = Double.compare(candidate.metrics.getViolationTime(), currentBest.metrics.getViolationTime());
+		result = Double.compare(candidate.metrics.getViolationCount(), currentBest.metrics.getViolationCount());
+		if(result != 0)
+		{
+			return result < 0;
+		}
+		result = Double.compare(positiveViolationTimeRatio(candidate), positiveViolationTimeRatio(currentBest));
 		if(result != 0)
 		{
 			return result < 0;
@@ -119,6 +132,15 @@ public final class ConstraintFirstCheckpointSelector
 		return candidate.epoch < currentBest.epoch;
 	}
 
+	private double positiveViolationTimeRatio(PolicyCheckpoint checkpoint)
+	{
+		if(checkpoint.deadlineMetrics != null)
+		{
+			return checkpoint.deadlineMetrics.getPositiveViolationTimeRatio();
+		}
+		return Math.max(0.0, checkpoint.metrics.getViolationTime());
+	}
+
 	private double totalReward(Map<String, Object> reward)
 	{
 		Object value = reward.get("totalReward");
@@ -133,24 +155,42 @@ public final class ConstraintFirstCheckpointSelector
 		}
 	}
 
+	private Map<String, Object> metricsMap(ExperimentMetrics metrics, DeadlineViolationMetrics deadlineMetrics)
+	{
+		Map<String, Object> map = metrics.toMap();
+		if(deadlineMetrics != null)
+		{
+			map.put(DeadlineViolationMetrics.MAP_KEY, deadlineMetrics.toMap());
+		}
+		return map;
+	}
+
 	private static final class PolicyCheckpoint
 	{
 		private final int epoch;
 		private final HierarchicalMaskedLearningPolicy policy;
 		private final ExperimentMetrics metrics;
+		private final DeadlineViolationMetrics deadlineMetrics;
 		private final Map<String, Object> reward;
 		private final int invalidTaskActionCount;
 		private final int invalidVmActionCount;
 
 		private PolicyCheckpoint(int epoch, HierarchicalMaskedLearningPolicy policy, ExperimentMetrics metrics,
-				Map<String, Object> reward, int invalidTaskActionCount, int invalidVmActionCount)
+				DeadlineViolationMetrics deadlineMetrics, Map<String, Object> reward,
+				int invalidTaskActionCount, int invalidVmActionCount)
 		{
 			this.epoch = epoch;
 			this.policy = policy;
 			this.metrics = metrics;
+			this.deadlineMetrics = deadlineMetrics;
 			this.reward = new LinkedHashMap<String, Object>(reward);
 			this.invalidTaskActionCount = invalidTaskActionCount;
 			this.invalidVmActionCount = invalidVmActionCount;
+		}
+
+		private int invalidActionCount()
+		{
+			return invalidTaskActionCount + invalidVmActionCount;
 		}
 	}
 }

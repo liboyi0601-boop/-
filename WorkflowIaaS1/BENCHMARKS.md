@@ -178,4 +178,23 @@ When enabled, `comparison.json` adds:
 
 The normalization reference is the expert / baseline evaluation on the eval suite. Zero or near-zero expert references are handled with an epsilon floor so the output avoids `NaN` and `Infinity`.
 
+## Deadline Violation Metric Hygiene
+
+`violationTime` is preserved as a legacy/raw metric. It is computed from signed deadline slack and can be negative when early finishes are mixed into the average. Baseline console output and golden regression behavior remain unchanged.
+
+Learning artifacts now add `deadlineViolationMetrics` as corrected analysis metadata:
+
+- `violationTimeRaw`
+- `positiveViolationTime`
+- `positiveViolationTimeRatio`
+- `meanPositiveViolationTimeRatio`
+- `signedDeadlineSlackRatio`
+- `earlyFinishSlackRatio`
+- `violatedWorkflowCount`
+- `violationCountRatioCorrected`
+
+Use corrected positive fields when interpreting deadline risk. Phase 8 checkpoint selection with `--checkpoint-selection constraint-first` uses invalid action count, legacy violation count, corrected `positiveViolationTimeRatio`, cost, reward, and earlier epoch in that order.
+
+`comparison.json` keeps legacy `violationTimeDelta` and adds corrected deadline deltas. When `--normalized-comparison` is enabled, it also adds normalized corrected deadline deltas using the expert / NOSF reference and an epsilon denominator floor.
+
 Each run keeps the existing artifact directory layout and records benchmark family provenance, optional replay balancing summaries, and optional normalized comparison analysis in artifacts and manifests.

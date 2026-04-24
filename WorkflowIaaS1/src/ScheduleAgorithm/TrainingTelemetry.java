@@ -18,7 +18,7 @@ public final class TrainingTelemetry
 	}
 
 	public void recordEpoch(int epoch, Map<String, Object> trainingMetrics,
-			ExperimentMetrics experimentMetrics, Map<String, Object> rewardMetrics,
+			ExperimentMetrics experimentMetrics, DeadlineViolationMetrics deadlineMetrics, Map<String, Object> rewardMetrics,
 			int invalidTaskActionCount, int invalidVmActionCount)
 	{
 		Map<String, Object> record = new LinkedHashMap<String, Object>();
@@ -32,6 +32,12 @@ public final class TrainingTelemetry
 		record.put("totalCost", experimentMetrics.getTotalCost());
 		record.put("violationCount", experimentMetrics.getViolationCount());
 		record.put("violationTime", experimentMetrics.getViolationTime());
+		if(deadlineMetrics != null)
+		{
+			record.put(DeadlineViolationMetrics.MAP_KEY, deadlineMetrics.toMap());
+			record.put("positiveViolationTimeRatio", deadlineMetrics.getPositiveViolationTimeRatio());
+			record.put("violationCountRatioCorrected", deadlineMetrics.getViolationCountRatioCorrected());
+		}
 		record.put("resourceUtilization", experimentMetrics.getResourceUtilization());
 		record.put("scheduleTimeMs", experimentMetrics.getScheduleTimeMs());
 		record.put("totalReward", rewardMetrics.get("totalReward"));
@@ -52,6 +58,7 @@ public final class TrainingTelemetry
 		summary.put("epochCount", epochMetrics.size());
 		summary.put("bestEpochByReward", findBestEpochByReward());
 		summary.put("bestEpochByViolationThenCost", findBestEpochByViolationThenCost());
+		summary.put("bestEpochByCorrectedViolationThenCost", findBestEpochByCorrectedViolationThenCost());
 		Map<String, Object> lastEpoch = epochMetrics.isEmpty() ? null : epochMetrics.get(epochMetrics.size() - 1);
 		summary.put("finalTaskAccuracy", valueOrNull(lastEpoch, "taskChosenActionAccuracy"));
 		summary.put("finalVmAccuracy", valueOrNull(lastEpoch, "vmChosenActionAccuracy"));
@@ -107,6 +114,25 @@ public final class TrainingTelemetry
 		return Integer.valueOf(((Number)best.get("epoch")).intValue());
 	}
 
+	private Integer findBestEpochByCorrectedViolationThenCost()
+	{
+		if(epochMetrics.isEmpty())
+		{
+			return null;
+		}
+
+		Map<String, Object> best = epochMetrics.get(0);
+		for(int index = 1; index < epochMetrics.size(); index++)
+		{
+			Map<String, Object> candidate = epochMetrics.get(index);
+			if(compareByCorrectedViolationThenCost(candidate, best) < 0)
+			{
+				best = candidate;
+			}
+		}
+		return Integer.valueOf(((Number)best.get("epoch")).intValue());
+	}
+
 	private int compareByReward(Map<String, Object> left, Map<String, Object> right)
 	{
 		double leftReward = numberValue(left.get("totalReward"));
@@ -140,6 +166,47 @@ public final class TrainingTelemetry
 			return result;
 		}
 		return Integer.compare(((Number)left.get("epoch")).intValue(), ((Number)right.get("epoch")).intValue());
+	}
+
+	private int compareByCorrectedViolationThenCost(Map<String, Object> left, Map<String, Object> right)
+	{
+		int result = Integer.compare(invalidActionCount(left), invalidActionCount(right));
+		if(result != 0)
+		{
+			return result;
+		}
+		result = Double.compare(numberValue(left.get("violationCount")), numberValue(right.get("violationCount")));
+		if(result != 0)
+		{
+			return result;
+		}
+		result = Double.compare(correctedPositiveViolationTimeRatio(left), correctedPositiveViolationTimeRatio(right));
+		if(result != 0)
+		{
+			return result;
+		}
+		result = Double.compare(numberValue(left.get("totalCost")), numberValue(right.get("totalCost")));
+		if(result != 0)
+		{
+			return result;
+		}
+		return Integer.compare(((Number)left.get("epoch")).intValue(), ((Number)right.get("epoch")).intValue());
+	}
+
+	private int invalidActionCount(Map<String, Object> metrics)
+	{
+		return intValue(metrics.get("invalidTaskActionCount")) + intValue(metrics.get("invalidVmActionCount"));
+	}
+
+	private double correctedPositiveViolationTimeRatio(Map<String, Object> metrics)
+	{
+		Object value = metrics.get("positiveViolationTimeRatio");
+		return value instanceof Number ? ((Number)value).doubleValue() : Double.POSITIVE_INFINITY;
+	}
+
+	private int intValue(Object value)
+	{
+		return value instanceof Number ? ((Number)value).intValue() : Integer.MAX_VALUE / 2;
 	}
 
 	private double numberValue(Object value)

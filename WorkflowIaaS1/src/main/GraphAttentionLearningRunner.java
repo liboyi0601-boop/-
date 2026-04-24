@@ -79,6 +79,8 @@ public class GraphAttentionLearningRunner
 		Map<String, Object> comparison = ScheduleAgorithm.ComparisonSummaryWriter.buildComparison(
 				evalReferenceExpertReplayData.getExpertMetrics(),
 				learnedResult.getMetrics(),
+				evalReferenceExpertReplayData.getExpertDeadlineMetrics(),
+				learnedResult.getDeadlineViolationMetrics(),
 				evalReferenceExpertReplayData.getExpertReward(),
 				learnedResult.getReward(),
 				options.normalizedComparison,

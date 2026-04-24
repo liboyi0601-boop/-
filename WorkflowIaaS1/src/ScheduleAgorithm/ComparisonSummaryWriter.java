@@ -25,6 +25,15 @@ public final class ComparisonSummaryWriter
 			Map<String, Object> expertReward, Map<String, Object> learnedReward,
 			boolean normalizedComparisonEnabled, double normalizationEpsilon)
 	{
+		return buildComparison(expertMetrics, learnedMetrics, null, null, expertReward, learnedReward,
+				normalizedComparisonEnabled, normalizationEpsilon);
+	}
+
+	public static Map<String, Object> buildComparison(ExperimentMetrics expertMetrics, ExperimentMetrics learnedMetrics,
+			DeadlineViolationMetrics expertDeadlineMetrics, DeadlineViolationMetrics learnedDeadlineMetrics,
+			Map<String, Object> expertReward, Map<String, Object> learnedReward,
+			boolean normalizedComparisonEnabled, double normalizationEpsilon)
+	{
 		Map<String, Object> comparison = new LinkedHashMap<String, Object>();
 		double costDelta = learnedMetrics.getTotalCost() - expertMetrics.getTotalCost();
 		double violationCountDelta = learnedMetrics.getViolationCount() - expertMetrics.getViolationCount();
@@ -34,10 +43,24 @@ public final class ComparisonSummaryWriter
 		comparison.put("costDelta", costDelta);
 		comparison.put("violationCountDelta", violationCountDelta);
 		comparison.put("violationTimeDelta", violationTimeDelta);
+		comparison.put("violationTimeSemantics", DeadlineViolationMetrics.RAW_VIOLATION_TIME_SEMANTICS);
 		comparison.put("resourceUtilizationDelta",
 				learnedMetrics.getResourceUtilization() - expertMetrics.getResourceUtilization());
 		comparison.put("scheduleTimeDeltaMs", learnedMetrics.getScheduleTimeMs() - expertMetrics.getScheduleTimeMs());
 		comparison.put("rewardDelta", rewardDelta);
+		if(expertDeadlineMetrics != null && learnedDeadlineMetrics != null)
+		{
+			double positiveViolationTimeDelta = learnedDeadlineMetrics.getPositiveViolationTime()
+					- expertDeadlineMetrics.getPositiveViolationTime();
+			double positiveViolationTimeRatioDelta = learnedDeadlineMetrics.getPositiveViolationTimeRatio()
+					- expertDeadlineMetrics.getPositiveViolationTimeRatio();
+			double violationCountRatioCorrectedDelta = learnedDeadlineMetrics.getViolationCountRatioCorrected()
+					- expertDeadlineMetrics.getViolationCountRatioCorrected();
+			comparison.put("positiveViolationTimeDelta", positiveViolationTimeDelta);
+			comparison.put("positiveViolationTimeRatioDelta", positiveViolationTimeRatioDelta);
+			comparison.put("violationCountRatioCorrectedDelta", violationCountRatioCorrectedDelta);
+			comparison.put("correctedDeadlineMetricSource", DeadlineViolationMetrics.FINISH_TIME_SOURCE);
+		}
 		if(normalizedComparisonEnabled)
 		{
 			double safeEpsilon = normalizationEpsilon > 0.0 ? normalizationEpsilon : DEFAULT_NORMALIZATION_EPSILON;
@@ -53,6 +76,18 @@ public final class ComparisonSummaryWriter
 					normalizeDelta(violationTimeDelta, expertMetrics.getViolationTime(), safeEpsilon));
 			comparison.put("normalizedMakespanDelta",
 					normalizeDelta(meanWorkflowMakespanDelta, expertMakespan, safeEpsilon));
+			if(expertDeadlineMetrics != null && learnedDeadlineMetrics != null)
+			{
+				comparison.put("normalizedPositiveViolationTimeDelta",
+						normalizeDelta(numberValue(comparison.get("positiveViolationTimeDelta")),
+								expertDeadlineMetrics.getPositiveViolationTime(), safeEpsilon));
+				comparison.put("normalizedPositiveViolationTimeRatioDelta",
+						normalizeDelta(numberValue(comparison.get("positiveViolationTimeRatioDelta")),
+								expertDeadlineMetrics.getPositiveViolationTimeRatio(), safeEpsilon));
+				comparison.put("normalizedViolationCountRatioCorrectedDelta",
+						normalizeDelta(numberValue(comparison.get("violationCountRatioCorrectedDelta")),
+								expertDeadlineMetrics.getViolationCountRatioCorrected(), safeEpsilon));
+			}
 			comparison.put("normalizedComparisonReference", "expert");
 			comparison.put("normalizedComparisonEpsilon", safeEpsilon);
 			comparison.put("normalizedDenominatorRule", "max(abs(reference), epsilon)");
@@ -79,6 +114,13 @@ public final class ComparisonSummaryWriter
 		summary.put("normalizedViolationCountDelta", comparison.get("normalizedViolationCountDelta"));
 		summary.put("normalizedViolationTimeDelta", comparison.get("normalizedViolationTimeDelta"));
 		summary.put("normalizedMakespanDelta", comparison.get("normalizedMakespanDelta"));
+		copyIfPresent(summary, comparison, "positiveViolationTimeDelta");
+		copyIfPresent(summary, comparison, "positiveViolationTimeRatioDelta");
+		copyIfPresent(summary, comparison, "violationCountRatioCorrectedDelta");
+		copyIfPresent(summary, comparison, "normalizedPositiveViolationTimeDelta");
+		copyIfPresent(summary, comparison, "normalizedPositiveViolationTimeRatioDelta");
+		copyIfPresent(summary, comparison, "normalizedViolationCountRatioCorrectedDelta");
+		copyIfPresent(summary, comparison, "violationTimeSemantics");
 		return summary;
 	}
 
@@ -94,6 +136,10 @@ public final class ComparisonSummaryWriter
 		summary.put("costDelta", comparison.get("costDelta"));
 		summary.put("violationCountDelta", comparison.get("violationCountDelta"));
 		summary.put("violationTimeDelta", comparison.get("violationTimeDelta"));
+		copyIfPresent(summary, comparison, "violationTimeSemantics");
+		copyIfPresent(summary, comparison, "positiveViolationTimeDelta");
+		copyIfPresent(summary, comparison, "positiveViolationTimeRatioDelta");
+		copyIfPresent(summary, comparison, "violationCountRatioCorrectedDelta");
 		summary.put("rewardDelta", comparison.get("rewardDelta"));
 		summary.put("scheduleTimeDeltaMs", comparison.get("scheduleTimeDeltaMs"));
 		copyIfPresent(summary, comparison, "meanWorkflowMakespanDelta");
@@ -101,6 +147,9 @@ public final class ComparisonSummaryWriter
 		copyIfPresent(summary, comparison, "normalizedViolationCountDelta");
 		copyIfPresent(summary, comparison, "normalizedViolationTimeDelta");
 		copyIfPresent(summary, comparison, "normalizedMakespanDelta");
+		copyIfPresent(summary, comparison, "normalizedPositiveViolationTimeDelta");
+		copyIfPresent(summary, comparison, "normalizedPositiveViolationTimeRatioDelta");
+		copyIfPresent(summary, comparison, "normalizedViolationCountRatioCorrectedDelta");
 		return summary;
 	}
 

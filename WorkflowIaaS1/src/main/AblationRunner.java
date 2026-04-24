@@ -127,6 +127,8 @@ public class AblationRunner
 			Map<String, Object> comparison = ComparisonSummaryWriter.buildComparison(
 					evalReferenceExpertReplayData.getExpertMetrics(),
 					learnedResult.getMetrics(),
+					evalReferenceExpertReplayData.getExpertDeadlineMetrics(),
+					learnedResult.getDeadlineViolationMetrics(),
 					evalReferenceExpertReplayData.getExpertReward(),
 					learnedResult.getReward(),
 					options.normalizedComparison,

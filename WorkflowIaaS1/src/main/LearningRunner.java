@@ -75,7 +75,8 @@ public class LearningRunner
 											+ hierarchicalPolicy.getClass().getName());
 								}
 								checkpointSelector.consider(epoch, (HierarchicalMaskedLearningPolicy)hierarchicalPolicy,
-										epochEvaluation.getMetrics(), epochEvaluation.getReward(),
+										epochEvaluation.getMetrics(), epochEvaluation.getDeadlineViolationMetrics(),
+										epochEvaluation.getReward(),
 										epochEvaluation.getInvalidTaskActionCount(),
 										epochEvaluation.getInvalidVmActionCount());
 							}
@@ -98,6 +99,8 @@ public class LearningRunner
 		Map<String, Object> comparison = ScheduleAgorithm.ComparisonSummaryWriter.buildComparison(
 				evalReferenceExpertReplayData.getExpertMetrics(),
 				learnedResult.getMetrics(),
+				evalReferenceExpertReplayData.getExpertDeadlineMetrics(),
+				learnedResult.getDeadlineViolationMetrics(),
 				evalReferenceExpertReplayData.getExpertReward(),
 				learnedResult.getReward(),
 				options.normalizedComparison,
@@ -117,6 +120,8 @@ public class LearningRunner
 			Map<String, Object> bestCheckpointComparison = ScheduleAgorithm.ComparisonSummaryWriter.buildComparison(
 					evalReferenceExpertReplayData.getExpertMetrics(),
 					bestCheckpointResult.getMetrics(),
+					evalReferenceExpertReplayData.getExpertDeadlineMetrics(),
+					bestCheckpointResult.getDeadlineViolationMetrics(),
 					evalReferenceExpertReplayData.getExpertReward(),
 					bestCheckpointResult.getReward(),
 					options.normalizedComparison,
@@ -125,6 +130,7 @@ public class LearningRunner
 			checkpointSummary = checkpointSelector.buildSummary(
 					copyFinalEpochMetrics(telemetry),
 					bestCheckpointResult.getMetrics(),
+					bestCheckpointResult.getDeadlineViolationMetrics(),
 					bestCheckpointResult.getReward(),
 					bestCheckpointResult.getInvalidTaskActionCount(),
 					bestCheckpointResult.getInvalidVmActionCount(),
@@ -174,7 +180,8 @@ public class LearningRunner
 		{
 			JsonSupport.writeJson(runDirectory.resolve("checkpoint-summary.json"), checkpointSummary);
 			JsonSupport.writeJson(runDirectory.resolve("best-learned-metrics.json"),
-					bestCheckpointResult.getMetrics().toMap());
+					LearningExperimentSupport.buildMetricsMap(
+							bestCheckpointResult.getMetrics(), bestCheckpointResult.getDeadlineViolationMetrics()));
 			JsonSupport.writeJson(runDirectory.resolve("best-learned-reward.json"),
 					bestCheckpointResult.getReward());
 		}
