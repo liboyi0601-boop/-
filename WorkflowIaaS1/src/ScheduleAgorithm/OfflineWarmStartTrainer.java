@@ -13,9 +13,18 @@ public final class OfflineWarmStartTrainer
 	private final double l2;
 	private final double epsilon;
 	private final long seed;
+	private final ConstraintAwareWeightingConfig weightingConfig;
 
 	public OfflineWarmStartTrainer(int taskHiddenSize, int vmHiddenSize, int epochs,
 			double learningRate, double l2, double epsilon, long seed)
+	{
+		this(taskHiddenSize, vmHiddenSize, epochs, learningRate, l2, epsilon, seed,
+				ConstraintAwareWeightingConfig.disabled());
+	}
+
+	public OfflineWarmStartTrainer(int taskHiddenSize, int vmHiddenSize, int epochs,
+			double learningRate, double l2, double epsilon, long seed,
+			ConstraintAwareWeightingConfig weightingConfig)
 	{
 		this.taskHiddenSize = taskHiddenSize;
 		this.vmHiddenSize = vmHiddenSize;
@@ -24,6 +33,9 @@ public final class OfflineWarmStartTrainer
 		this.l2 = l2;
 		this.epsilon = epsilon;
 		this.seed = seed;
+		this.weightingConfig = weightingConfig == null
+				? ConstraintAwareWeightingConfig.disabled()
+				: weightingConfig;
 	}
 
 	public OfflineWarmStartResult train(HierarchicalReplayBuffer replayBuffer)
@@ -42,25 +54,59 @@ public final class OfflineWarmStartTrainer
 				replayBuffer.getTaskExamples().get(0).getFeatureSize(), taskHiddenSize, new Random(seed));
 		SimpleTwoLayerScorer vmScorer = new SimpleTwoLayerScorer(
 				replayBuffer.getVmExamples().get(0).getFeatureSize(), vmHiddenSize, new Random(seed + 1L));
+		ConstraintAwareSampleWeighter sampleWeighter = new ConstraintAwareSampleWeighter(weightingConfig);
 
 		double lastTaskLoss = 0.0;
 		double lastVmLoss = 0.0;
+		EpochWeightStats lastWeightStats = null;
 		for(int epoch = 0; epoch < epochs; epoch++)
 		{
 			double taskLossSum = 0.0;
+			EpochWeightStats weightStats = weightingConfig.isWeightedLossEnabled() ? new EpochWeightStats() : null;
 			for(MaskedDecisionExample example: replayBuffer.getTaskExamples())
 			{
-				taskLossSum += taskScorer.trainOnExample(example, learningRate, l2);
+				if(weightStats == null)
+				{
+					taskLossSum += taskScorer.trainOnExample(example, learningRate, l2);
+				}
+				else
+				{
+					ConstraintAwareSampleWeighter.WeightResult weightResult = sampleWeighter.weightTask(example);
+					double unweightedLoss = taskScorer.computeLoss(example);
+					double weightedLoss = taskScorer.trainOnExample(
+							example, learningRate, l2, weightResult.getSampleWeight());
+					weightStats.recordTask(weightResult, unweightedLoss, weightedLoss);
+				}
 			}
 
 			double vmLossSum = 0.0;
 			for(MaskedDecisionExample example: replayBuffer.getVmExamples())
 			{
-				vmLossSum += vmScorer.trainOnExample(example, learningRate, l2);
+				if(weightStats == null)
+				{
+					vmLossSum += vmScorer.trainOnExample(example, learningRate, l2);
+				}
+				else
+				{
+					ConstraintAwareSampleWeighter.WeightResult weightResult = sampleWeighter.weightVm(example);
+					double unweightedLoss = vmScorer.computeLoss(example);
+					double weightedLoss = vmScorer.trainOnExample(
+							example, learningRate, l2, weightResult.getSampleWeight());
+					weightStats.recordVm(weightResult, unweightedLoss, weightedLoss);
+				}
 			}
 
-			lastTaskLoss = taskLossSum / replayBuffer.getTaskExamples().size();
-			lastVmLoss = vmLossSum / replayBuffer.getVmExamples().size();
+			if(weightStats == null)
+			{
+				lastTaskLoss = taskLossSum / replayBuffer.getTaskExamples().size();
+				lastVmLoss = vmLossSum / replayBuffer.getVmExamples().size();
+			}
+			else
+			{
+				lastTaskLoss = weightStats.averageTaskUnweightedLoss();
+				lastVmLoss = weightStats.averageVmUnweightedLoss();
+				lastWeightStats = weightStats;
+			}
 
 			if(epochListener != null)
 			{
@@ -71,6 +117,10 @@ public final class OfflineWarmStartTrainer
 				epochMetrics.put("vmChosenActionAccuracy", computeAccuracy(vmScorer, replayBuffer.getVmExamples()));
 				epochMetrics.put("taskMaskHitRate", computeMaskHitRate(taskScorer, replayBuffer.getTaskExamples()));
 				epochMetrics.put("vmMaskHitRate", computeMaskHitRate(vmScorer, replayBuffer.getVmExamples()));
+				if(weightStats != null)
+				{
+					epochMetrics.putAll(weightStats.toEpochMetrics());
+				}
 				HierarchicalMaskedLearningPolicy currentPolicy = new HierarchicalMaskedLearningPolicy(
 						taskScorer, vmScorer, epsilon, seed + 2L);
 				epochListener.onEpoch(epoch, epochMetrics, currentPolicy, currentPolicy);
@@ -88,6 +138,16 @@ public final class OfflineWarmStartTrainer
 		summary.put("seed", seed);
 		summary.put("finalTaskLoss", lastTaskLoss);
 		summary.put("finalVmLoss", lastVmLoss);
+		if(weightingConfig.isEnabled())
+		{
+			Map<String, Object> constraintAwareSummary =
+					new LinkedHashMap<String, Object>(weightingConfig.toSummary());
+			if(lastWeightStats != null)
+			{
+				constraintAwareSummary.putAll(lastWeightStats.toSummary());
+			}
+			summary.put("constraintAwareImitation", constraintAwareSummary);
+		}
 
 		return new OfflineWarmStartResult(
 				new HierarchicalMaskedLearningPolicy(taskScorer, vmScorer, epsilon, seed + 2L),
@@ -128,5 +188,129 @@ public final class OfflineWarmStartTrainer
 			}
 		}
 		return (double)validCount / examples.size();
+	}
+
+	private static final class EpochWeightStats
+	{
+		private int taskCount;
+		private int vmCount;
+		private double taskUnweightedLossSum;
+		private double vmUnweightedLossSum;
+		private double taskWeightedLossSum;
+		private double vmWeightedLossSum;
+		private double taskWeightSum;
+		private double vmWeightSum;
+		private double maxTaskWeight = 1.0;
+		private double maxVmWeight = 1.0;
+		private int fallbackCount;
+		private final Map<String, Integer> fallbackReasonCounts = new LinkedHashMap<String, Integer>();
+
+		private void recordTask(ConstraintAwareSampleWeighter.WeightResult weightResult,
+				double unweightedLoss, double weightedLoss)
+		{
+			taskCount++;
+			taskUnweightedLossSum += safeValue(unweightedLoss);
+			taskWeightedLossSum += safeValue(weightedLoss);
+			taskWeightSum += weightResult.getSampleWeight();
+			maxTaskWeight = Math.max(maxTaskWeight, weightResult.getSampleWeight());
+			recordFallback(weightResult);
+		}
+
+		private void recordVm(ConstraintAwareSampleWeighter.WeightResult weightResult,
+				double unweightedLoss, double weightedLoss)
+		{
+			vmCount++;
+			vmUnweightedLossSum += safeValue(unweightedLoss);
+			vmWeightedLossSum += safeValue(weightedLoss);
+			vmWeightSum += weightResult.getSampleWeight();
+			maxVmWeight = Math.max(maxVmWeight, weightResult.getSampleWeight());
+			recordFallback(weightResult);
+		}
+
+		private void recordFallback(ConstraintAwareSampleWeighter.WeightResult weightResult)
+		{
+			if(!weightResult.isFallback())
+			{
+				return;
+			}
+			fallbackCount++;
+			String reason = weightResult.getFallbackReason() == null
+					? "unknown"
+					: weightResult.getFallbackReason();
+			Integer current = fallbackReasonCounts.get(reason);
+			fallbackReasonCounts.put(reason, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
+		}
+
+		private Map<String, Object> toEpochMetrics()
+		{
+			Map<String, Object> metrics = new LinkedHashMap<String, Object>();
+			metrics.put("unweightedTaskLoss", averageTaskUnweightedLoss());
+			metrics.put("unweightedVmLoss", averageVmUnweightedLoss());
+			metrics.put("weightedTaskLoss", averageTaskWeightedLoss());
+			metrics.put("weightedVmLoss", averageVmWeightedLoss());
+			metrics.put("averageTaskSampleWeight", averageTaskSampleWeight());
+			metrics.put("averageVmSampleWeight", averageVmSampleWeight());
+			metrics.put("maxTaskSampleWeight", maxTaskWeight);
+			metrics.put("maxVmSampleWeight", maxVmWeight);
+			metrics.put("weightingFallbackCount", fallbackCount);
+			metrics.put("weightingFallbackReasonCounts", new LinkedHashMap<String, Integer>(fallbackReasonCounts));
+			return metrics;
+		}
+
+		private Map<String, Object> toSummary()
+		{
+			Map<String, Object> summary = new LinkedHashMap<String, Object>();
+			Map<String, Object> taskWeightStats = new LinkedHashMap<String, Object>();
+			taskWeightStats.put("averageSampleWeight", averageTaskSampleWeight());
+			taskWeightStats.put("maxSampleWeight", maxTaskWeight);
+			taskWeightStats.put("unweightedLoss", averageTaskUnweightedLoss());
+			taskWeightStats.put("weightedLoss", averageTaskWeightedLoss());
+			Map<String, Object> vmWeightStats = new LinkedHashMap<String, Object>();
+			vmWeightStats.put("averageSampleWeight", averageVmSampleWeight());
+			vmWeightStats.put("maxSampleWeight", maxVmWeight);
+			vmWeightStats.put("unweightedLoss", averageVmUnweightedLoss());
+			vmWeightStats.put("weightedLoss", averageVmWeightedLoss());
+			summary.put("taskWeightStats", taskWeightStats);
+			summary.put("vmWeightStats", vmWeightStats);
+			summary.put("fallbackCount", fallbackCount);
+			summary.put("fallbackReason", fallbackReasonCounts.isEmpty() ? null : fallbackReasonCounts.keySet().iterator().next());
+			summary.put("fallbackReasonCounts", new LinkedHashMap<String, Integer>(fallbackReasonCounts));
+			return summary;
+		}
+
+		private double averageTaskUnweightedLoss()
+		{
+			return taskCount == 0 ? 0.0 : taskUnweightedLossSum / taskCount;
+		}
+
+		private double averageVmUnweightedLoss()
+		{
+			return vmCount == 0 ? 0.0 : vmUnweightedLossSum / vmCount;
+		}
+
+		private double averageTaskWeightedLoss()
+		{
+			return taskCount == 0 ? 0.0 : taskWeightedLossSum / taskCount;
+		}
+
+		private double averageVmWeightedLoss()
+		{
+			return vmCount == 0 ? 0.0 : vmWeightedLossSum / vmCount;
+		}
+
+		private double averageTaskSampleWeight()
+		{
+			return taskCount == 0 ? 1.0 : taskWeightSum / taskCount;
+		}
+
+		private double averageVmSampleWeight()
+		{
+			return vmCount == 0 ? 1.0 : vmWeightSum / vmCount;
+		}
+
+		private static double safeValue(double value)
+		{
+			return Double.isFinite(value) ? value : 0.0;
+		}
 	}
 }

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import ScheduleAgorithm.ConstraintFirstCheckpointSelector;
+import ScheduleAgorithm.ConstraintAwareWeightingConfig;
 import ScheduleAgorithm.EpochMetricsLogger;
 import ScheduleAgorithm.ExperimentMetrics;
 import ScheduleAgorithm.HierarchicalMaskedLearningPolicy;
@@ -48,7 +49,8 @@ public class LearningRunner
 				options.learningRate,
 				options.l2,
 				options.epsilon,
-				options.seed);
+				options.seed,
+				options.toConstraintAwareWeightingConfig());
 
 		TrainingTelemetry telemetry = new TrainingTelemetry("imitation");
 		final ConstraintFirstCheckpointSelector checkpointSelector = options.isCheckpointSelectionEnabled()
@@ -232,13 +234,18 @@ public class LearningRunner
 		private final boolean normalizedComparison;
 		private final double normalizationEpsilon;
 		private final String checkpointSelection;
+		private final boolean constraintAwareImitation;
+		private final String riskWeightMode;
+		private final double riskWeightScale;
+		private final double maxSampleWeight;
 		private final Path outputRoot;
 
 		private RunnerOptions(RegressionSuite trainSuite, RegressionSuite evalSuite, int epochs, int taskHiddenSize,
 				int vmHiddenSize,
 				double learningRate, double l2, double epsilon, long seed, boolean balancedFamilies,
 				String balanceStrategy, boolean normalizedComparison, double normalizationEpsilon,
-				String checkpointSelection, Path outputRoot)
+				String checkpointSelection, boolean constraintAwareImitation, String riskWeightMode,
+				double riskWeightScale, double maxSampleWeight, Path outputRoot)
 		{
 			this.trainSuite = trainSuite;
 			this.evalSuite = evalSuite;
@@ -254,6 +261,10 @@ public class LearningRunner
 			this.normalizedComparison = normalizedComparison;
 			this.normalizationEpsilon = normalizationEpsilon;
 			this.checkpointSelection = checkpointSelection;
+			this.constraintAwareImitation = constraintAwareImitation;
+			this.riskWeightMode = riskWeightMode;
+			this.riskWeightScale = riskWeightScale;
+			this.maxSampleWeight = maxSampleWeight;
 			this.outputRoot = outputRoot;
 		}
 
@@ -274,6 +285,13 @@ public class LearningRunner
 			boolean normalizedComparison = false;
 			double normalizationEpsilon = 1e-9;
 			String checkpointSelection = CHECKPOINT_SELECTION_NONE;
+			boolean constraintAwareImitation = false;
+			String riskWeightMode = ConstraintAwareWeightingConfig.MODE_NONE;
+			double riskWeightScale = 0.0;
+			double maxSampleWeight = 1.0;
+			boolean riskWeightModeSpecified = false;
+			boolean riskWeightScaleSpecified = false;
+			boolean maxSampleWeightSpecified = false;
 			Path outputRoot = Paths.get("learning-artifacts");
 
 			for(int index = 0; index < args.length; index++)
@@ -352,6 +370,28 @@ public class LearningRunner
 					index++;
 					checkpointSelection = args[index];
 				}
+				else if("--constraint-aware-imitation".equals(arg))
+				{
+					constraintAwareImitation = true;
+				}
+				else if("--risk-weight-mode".equals(arg))
+				{
+					index++;
+					riskWeightMode = args[index];
+					riskWeightModeSpecified = true;
+				}
+				else if("--risk-weight-scale".equals(arg))
+				{
+					index++;
+					riskWeightScale = Double.parseDouble(args[index]);
+					riskWeightScaleSpecified = true;
+				}
+				else if("--max-sample-weight".equals(arg))
+				{
+					index++;
+					maxSampleWeight = Double.parseDouble(args[index]);
+					maxSampleWeightSpecified = true;
+				}
 				else if("--out".equals(arg))
 				{
 					index++;
@@ -372,12 +412,30 @@ public class LearningRunner
 			{
 				throw new IllegalArgumentException("Unsupported checkpoint selection: " + checkpointSelection);
 			}
+			if(constraintAwareImitation)
+			{
+				if(!riskWeightModeSpecified)
+				{
+					riskWeightMode = ConstraintAwareWeightingConfig.MODE_LOW_SLACK;
+				}
+				if(!riskWeightScaleSpecified)
+				{
+					riskWeightScale = 2.0;
+				}
+				if(!maxSampleWeightSpecified)
+				{
+					maxSampleWeight = 5.0;
+				}
+			}
+			ConstraintAwareWeightingConfig.create(
+					constraintAwareImitation, riskWeightMode, riskWeightScale, maxSampleWeight);
 
 			RegressionSuite resolvedTrainSuite = trainSuite == null ? suite : trainSuite;
 			RegressionSuite resolvedEvalSuite = evalSuite == null ? resolvedTrainSuite : evalSuite;
 			return new RunnerOptions(resolvedTrainSuite, resolvedEvalSuite, epochs, taskHiddenSize, vmHiddenSize,
 					learningRate, l2, epsilon, seed, balancedFamilies, balanceStrategy,
-					normalizedComparison, normalizationEpsilon, checkpointSelection, outputRoot);
+					normalizedComparison, normalizationEpsilon, checkpointSelection,
+					constraintAwareImitation, riskWeightMode, riskWeightScale, maxSampleWeight, outputRoot);
 		}
 
 		private boolean isCheckpointSelectionEnabled()
@@ -412,7 +470,17 @@ public class LearningRunner
 			{
 				hyperParameters.put("checkpointSelection", checkpointSelection);
 			}
+			if(constraintAwareImitation)
+			{
+				hyperParameters.put("constraintAwareImitation", toConstraintAwareWeightingConfig().toSummary());
+			}
 			return hyperParameters;
+		}
+
+		private ConstraintAwareWeightingConfig toConstraintAwareWeightingConfig()
+		{
+			return ConstraintAwareWeightingConfig.create(
+					constraintAwareImitation, riskWeightMode, riskWeightScale, maxSampleWeight);
 		}
 	}
 }

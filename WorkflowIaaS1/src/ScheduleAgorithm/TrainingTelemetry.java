@@ -29,6 +29,16 @@ public final class TrainingTelemetry
 		record.put("vmChosenActionAccuracy", trainingMetrics.get("vmChosenActionAccuracy"));
 		record.put("taskMaskHitRate", trainingMetrics.get("taskMaskHitRate"));
 		record.put("vmMaskHitRate", trainingMetrics.get("vmMaskHitRate"));
+		copyOptional(trainingMetrics, record, "unweightedTaskLoss");
+		copyOptional(trainingMetrics, record, "unweightedVmLoss");
+		copyOptional(trainingMetrics, record, "weightedTaskLoss");
+		copyOptional(trainingMetrics, record, "weightedVmLoss");
+		copyOptional(trainingMetrics, record, "averageTaskSampleWeight");
+		copyOptional(trainingMetrics, record, "averageVmSampleWeight");
+		copyOptional(trainingMetrics, record, "maxTaskSampleWeight");
+		copyOptional(trainingMetrics, record, "maxVmSampleWeight");
+		copyOptional(trainingMetrics, record, "weightingFallbackCount");
+		copyOptional(trainingMetrics, record, "weightingFallbackReasonCounts");
 		record.put("totalCost", experimentMetrics.getTotalCost());
 		record.put("violationCount", experimentMetrics.getViolationCount());
 		record.put("violationTime", experimentMetrics.getViolationTime());
@@ -65,6 +75,14 @@ public final class TrainingTelemetry
 		summary.put("finalTaskMaskHitRate", valueOrNull(lastEpoch, "taskMaskHitRate"));
 		summary.put("finalVmMaskHitRate", valueOrNull(lastEpoch, "vmMaskHitRate"));
 		return summary;
+	}
+
+	private void copyOptional(Map<String, Object> source, Map<String, Object> target, String key)
+	{
+		if(source.containsKey(key))
+		{
+			target.put(key, source.get(key));
+		}
 	}
 
 	private Object valueOrNull(Map<String, Object> metrics, String key)
