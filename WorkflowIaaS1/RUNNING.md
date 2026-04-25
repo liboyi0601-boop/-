@@ -36,9 +36,27 @@ Run the main experiment entry:
 ./scripts/run_experiment.sh
 ```
 
+Generate benchmark-only template sets without touching `WorkflowTemplateSet.dat`:
+
+```bash
+./scripts/generate_benchmark_templates.sh all
+```
+
+Generate benchmark-only workload files without touching `ExperimentalWorkflow.dat`:
+
+```bash
+./scripts/generate_benchmark_workloads.sh bench-cybershake-small
+```
+
 ## Notes
 
 - Main entry: `main.ExperimentPlatform`
 - Template builder: `workflow.ReadWorkflowFile`
 - Workflow generator: `workflow.WorkflowProducer`
+- Benchmark template builder: `workflow.BenchmarkTemplateBuilder`
+- Benchmark workload generator: `workflow.BenchmarkWorkflowGenerator`
 - If you change `share.StaticfinalTags`, rerun the generator before running the experiment.
+- Benchmark setup and benchmark runner commands are documented in `BENCHMARKS.md`.
+- Phase 11-prep examples for `--balanced-families`, `--balance-strategy min-quota`, and `--normalized-comparison`
+  are documented in `BENCHMARKS.md`.
+- Phase 11C deadline violation metric hygiene notes are documented in `BENCHMARKS.md`; baseline default output remains unchanged.
