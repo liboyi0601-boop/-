@@ -9,6 +9,15 @@ public final class ConstraintAwareWeightingConfig
 	public static final String MODE_LOW_SLACK = "low-slack";
 	public static final String MODE_DEADLINE_RISK = "deadline-risk";
 	public static final String MODE_SEVERITY_AWARE = "severity-aware";
+	public static final double SEVERITY_TASK_SLACK_WEIGHT = 0.25;
+	public static final double SEVERITY_TASK_VIOLATION_WEIGHT = 0.25;
+	public static final double SEVERITY_TASK_CRITICAL_PATH_WEIGHT = 0.20;
+	public static final double SEVERITY_TASK_LATENESS_WEIGHT = 0.30;
+	public static final double SEVERITY_VM_INFEASIBLE_WEIGHT = 0.20;
+	public static final double SEVERITY_VM_SLACK_WEIGHT = 0.20;
+	public static final double SEVERITY_VM_VIOLATION_WEIGHT = 0.20;
+	public static final double SEVERITY_VM_CRITICAL_PATH_WEIGHT = 0.15;
+	public static final double SEVERITY_VM_LATENESS_WEIGHT = 0.25;
 
 	private final boolean enabled;
 	private final String riskWeightMode;
@@ -96,6 +105,33 @@ public final class ConstraintAwareWeightingConfig
 		summary.put("riskScoreRange", "[0, 1]");
 		summary.put("supportedRiskWeightModes",
 				MODE_NONE + "," + MODE_LOW_SLACK + "," + MODE_DEADLINE_RISK + "," + MODE_SEVERITY_AWARE);
+		if(enabled && MODE_SEVERITY_AWARE.equals(riskWeightMode))
+		{
+			summary.put("riskAggregation", "component-weighted");
+			summary.put("severityAwareTaskWeights", severityAwareTaskWeights());
+			summary.put("severityAwareVmWeights", severityAwareVmWeights());
+		}
 		return summary;
+	}
+
+	private Map<String, Object> severityAwareTaskWeights()
+	{
+		Map<String, Object> weights = new LinkedHashMap<String, Object>();
+		weights.put("slack", SEVERITY_TASK_SLACK_WEIGHT);
+		weights.put("violation", SEVERITY_TASK_VIOLATION_WEIGHT);
+		weights.put("criticalPath", SEVERITY_TASK_CRITICAL_PATH_WEIGHT);
+		weights.put("lateness", SEVERITY_TASK_LATENESS_WEIGHT);
+		return weights;
+	}
+
+	private Map<String, Object> severityAwareVmWeights()
+	{
+		Map<String, Object> weights = new LinkedHashMap<String, Object>();
+		weights.put("infeasible", SEVERITY_VM_INFEASIBLE_WEIGHT);
+		weights.put("slack", SEVERITY_VM_SLACK_WEIGHT);
+		weights.put("violation", SEVERITY_VM_VIOLATION_WEIGHT);
+		weights.put("criticalPath", SEVERITY_VM_CRITICAL_PATH_WEIGHT);
+		weights.put("lateness", SEVERITY_VM_LATENESS_WEIGHT);
+		return weights;
 	}
 }

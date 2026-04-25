@@ -39,6 +39,17 @@ public final class TrainingTelemetry
 		copyOptional(trainingMetrics, record, "averageVmRiskScore");
 		copyOptional(trainingMetrics, record, "maxTaskRiskScore");
 		copyOptional(trainingMetrics, record, "maxVmRiskScore");
+		copyOptional(trainingMetrics, record, "averageTaskSlackRisk");
+		copyOptional(trainingMetrics, record, "averageTaskViolationRisk");
+		copyOptional(trainingMetrics, record, "averageTaskCriticalPathRisk");
+		copyOptional(trainingMetrics, record, "averageTaskLatenessRisk");
+		copyOptional(trainingMetrics, record, "maxTaskLatenessRisk");
+		copyOptional(trainingMetrics, record, "averageVmInfeasibleRisk");
+		copyOptional(trainingMetrics, record, "averageVmSlackRisk");
+		copyOptional(trainingMetrics, record, "averageVmViolationRisk");
+		copyOptional(trainingMetrics, record, "averageVmCriticalPathRisk");
+		copyOptional(trainingMetrics, record, "averageVmLatenessRisk");
+		copyOptional(trainingMetrics, record, "maxVmLatenessRisk");
 		copyOptional(trainingMetrics, record, "minTaskSampleWeight");
 		copyOptional(trainingMetrics, record, "minVmSampleWeight");
 		copyOptional(trainingMetrics, record, "maxTaskSampleWeight");

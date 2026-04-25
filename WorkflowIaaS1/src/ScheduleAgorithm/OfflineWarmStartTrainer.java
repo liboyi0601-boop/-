@@ -207,6 +207,12 @@ public final class OfflineWarmStartTrainer
 		private double vmRiskScoreSum;
 		private double maxTaskRiskScore;
 		private double maxVmRiskScore;
+		private final Map<String, Double> taskComponentSums = new LinkedHashMap<String, Double>();
+		private final Map<String, Double> vmComponentSums = new LinkedHashMap<String, Double>();
+		private final Map<String, Double> taskComponentMax = new LinkedHashMap<String, Double>();
+		private final Map<String, Double> vmComponentMax = new LinkedHashMap<String, Double>();
+		private final Map<String, Integer> taskComponentCounts = new LinkedHashMap<String, Integer>();
+		private final Map<String, Integer> vmComponentCounts = new LinkedHashMap<String, Integer>();
 		private double maxTaskWeight = 1.0;
 		private double maxVmWeight = 1.0;
 		private double minTaskWeight = Double.POSITIVE_INFINITY;
@@ -230,6 +236,7 @@ public final class OfflineWarmStartTrainer
 			taskWeightSum += weightResult.getSampleWeight();
 			taskRiskScoreSum += weightResult.getRiskScore();
 			maxTaskRiskScore = Math.max(maxTaskRiskScore, weightResult.getRiskScore());
+			recordComponents(weightResult.getRiskComponents(), taskComponentSums, taskComponentMax, taskComponentCounts);
 			maxTaskWeight = Math.max(maxTaskWeight, weightResult.getSampleWeight());
 			minTaskWeight = Math.min(minTaskWeight, weightResult.getSampleWeight());
 			if(weightResult.getSampleWeight() >= highWeightThreshold)
@@ -248,6 +255,7 @@ public final class OfflineWarmStartTrainer
 			vmWeightSum += weightResult.getSampleWeight();
 			vmRiskScoreSum += weightResult.getRiskScore();
 			maxVmRiskScore = Math.max(maxVmRiskScore, weightResult.getRiskScore());
+			recordComponents(weightResult.getRiskComponents(), vmComponentSums, vmComponentMax, vmComponentCounts);
 			maxVmWeight = Math.max(maxVmWeight, weightResult.getSampleWeight());
 			minVmWeight = Math.min(minVmWeight, weightResult.getSampleWeight());
 			if(weightResult.getSampleWeight() >= highWeightThreshold)
@@ -284,6 +292,8 @@ public final class OfflineWarmStartTrainer
 			metrics.put("averageVmRiskScore", averageVmRiskScore());
 			metrics.put("maxTaskRiskScore", maxTaskRiskScore);
 			metrics.put("maxVmRiskScore", maxVmRiskScore);
+			appendTaskComponentEpochMetrics(metrics);
+			appendVmComponentEpochMetrics(metrics);
 			metrics.put("minTaskSampleWeight", minTaskSampleWeight());
 			metrics.put("minVmSampleWeight", minVmSampleWeight());
 			metrics.put("maxTaskSampleWeight", maxTaskWeight);
@@ -305,6 +315,7 @@ public final class OfflineWarmStartTrainer
 			taskWeightStats.put("averageSampleWeight", averageTaskSampleWeight());
 			taskWeightStats.put("averageRiskScore", averageTaskRiskScore());
 			taskWeightStats.put("maxRiskScore", maxTaskRiskScore);
+			appendTaskComponentSummary(taskWeightStats);
 			taskWeightStats.put("minSampleWeight", minTaskSampleWeight());
 			taskWeightStats.put("maxSampleWeight", maxTaskWeight);
 			taskWeightStats.put("highSampleWeightThreshold", highWeightThreshold);
@@ -316,6 +327,7 @@ public final class OfflineWarmStartTrainer
 			vmWeightStats.put("averageSampleWeight", averageVmSampleWeight());
 			vmWeightStats.put("averageRiskScore", averageVmRiskScore());
 			vmWeightStats.put("maxRiskScore", maxVmRiskScore);
+			appendVmComponentSummary(vmWeightStats);
 			vmWeightStats.put("minSampleWeight", minVmSampleWeight());
 			vmWeightStats.put("maxSampleWeight", maxVmWeight);
 			vmWeightStats.put("highSampleWeightThreshold", highWeightThreshold);
@@ -329,6 +341,123 @@ public final class OfflineWarmStartTrainer
 			summary.put("fallbackReason", fallbackReasonCounts.isEmpty() ? null : fallbackReasonCounts.keySet().iterator().next());
 			summary.put("fallbackReasonCounts", new LinkedHashMap<String, Integer>(fallbackReasonCounts));
 			return summary;
+		}
+
+		private void recordComponents(Map<String, Double> components, Map<String, Double> sums,
+				Map<String, Double> maxValues, Map<String, Integer> counts)
+		{
+			if(components == null || components.isEmpty())
+			{
+				return;
+			}
+			for(Map.Entry<String, Double> entry: components.entrySet())
+			{
+				if(entry.getValue() == null || !Double.isFinite(entry.getValue().doubleValue()))
+				{
+					continue;
+				}
+				String key = entry.getKey();
+				double value = entry.getValue().doubleValue();
+				Double currentSum = sums.get(key);
+				sums.put(key, Double.valueOf((currentSum == null ? 0.0 : currentSum.doubleValue()) + value));
+				Double currentMax = maxValues.get(key);
+				maxValues.put(key, Double.valueOf(currentMax == null ? value : Math.max(currentMax.doubleValue(), value)));
+				Integer currentCount = counts.get(key);
+				counts.put(key, Integer.valueOf(currentCount == null ? 1 : currentCount.intValue() + 1));
+			}
+		}
+
+		private void appendTaskComponentEpochMetrics(Map<String, Object> metrics)
+		{
+			if(taskComponentCounts.isEmpty())
+			{
+				return;
+			}
+			metrics.put("averageTaskSlackRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_SLACK_RISK));
+			metrics.put("averageTaskViolationRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_VIOLATION_RISK));
+			metrics.put("averageTaskCriticalPathRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_CRITICAL_PATH_RISK));
+			metrics.put("averageTaskLatenessRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+			metrics.put("maxTaskLatenessRisk",
+					maxComponent(taskComponentMax, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+		}
+
+		private void appendVmComponentEpochMetrics(Map<String, Object> metrics)
+		{
+			if(vmComponentCounts.isEmpty())
+			{
+				return;
+			}
+			metrics.put("averageVmInfeasibleRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_INFEASIBLE_RISK));
+			metrics.put("averageVmSlackRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_SLACK_RISK));
+			metrics.put("averageVmViolationRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_VIOLATION_RISK));
+			metrics.put("averageVmCriticalPathRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_CRITICAL_PATH_RISK));
+			metrics.put("averageVmLatenessRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+			metrics.put("maxVmLatenessRisk",
+					maxComponent(vmComponentMax, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+		}
+
+		private void appendTaskComponentSummary(Map<String, Object> taskWeightStats)
+		{
+			if(taskComponentCounts.isEmpty())
+			{
+				return;
+			}
+			taskWeightStats.put("averageSlackRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_SLACK_RISK));
+			taskWeightStats.put("averageViolationRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_VIOLATION_RISK));
+			taskWeightStats.put("averageCriticalPathRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_CRITICAL_PATH_RISK));
+			taskWeightStats.put("averageLatenessRisk",
+					averageComponent(taskComponentSums, taskComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+			taskWeightStats.put("maxLatenessRisk",
+					maxComponent(taskComponentMax, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+		}
+
+		private void appendVmComponentSummary(Map<String, Object> vmWeightStats)
+		{
+			if(vmComponentCounts.isEmpty())
+			{
+				return;
+			}
+			vmWeightStats.put("averageInfeasibleRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_INFEASIBLE_RISK));
+			vmWeightStats.put("averageSlackRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_SLACK_RISK));
+			vmWeightStats.put("averageViolationRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_VIOLATION_RISK));
+			vmWeightStats.put("averageCriticalPathRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_CRITICAL_PATH_RISK));
+			vmWeightStats.put("averageLatenessRisk",
+					averageComponent(vmComponentSums, vmComponentCounts, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+			vmWeightStats.put("maxLatenessRisk",
+					maxComponent(vmComponentMax, ConstraintAwareSampleWeighter.COMPONENT_LATENESS_RISK));
+		}
+
+		private double averageComponent(Map<String, Double> sums, Map<String, Integer> counts, String key)
+		{
+			Integer count = counts.get(key);
+			Double sum = sums.get(key);
+			if(count == null || count.intValue() == 0 || sum == null)
+			{
+				return 0.0;
+			}
+			return sum.doubleValue() / count.intValue();
+		}
+
+		private double maxComponent(Map<String, Double> maxValues, String key)
+		{
+			Double value = maxValues.get(key);
+			return value == null ? 0.0 : value.doubleValue();
 		}
 
 		private double averageTaskUnweightedLoss()
