@@ -2,16 +2,6 @@ package ScheduleAgorithm;
 
 public final class ConstraintAwareSampleWeighter
 {
-	private static final int TASK_CRITICAL_PATH_SLACK = 8;
-	private static final int TASK_WORKFLOW_NORMALIZED_SLACK = 12;
-	private static final int TASK_VIOLATION_RISK = 13;
-	private static final int TASK_REMAINING_CRITICAL_PATH = 15;
-
-	private static final int VM_FEASIBLE_UNDER_SUB_DEADLINE = 9;
-	private static final int VM_CRITICAL_PATH_SLACK = 12;
-	private static final int VM_WORKFLOW_NORMALIZED_SLACK = 13;
-	private static final int VM_VIOLATION_RISK = 14;
-
 	private final ConstraintAwareWeightingConfig config;
 
 	public ConstraintAwareSampleWeighter(ConstraintAwareWeightingConfig config)
@@ -34,17 +24,17 @@ public final class ConstraintAwareSampleWeighter
 		if(ConstraintAwareWeightingConfig.MODE_LOW_SLACK.equals(config.getRiskWeightMode()))
 		{
 			return weightFromRisk(maxRisk(
-					lowSlackRisk(features, TASK_WORKFLOW_NORMALIZED_SLACK),
-					violationRisk(features, TASK_VIOLATION_RISK),
-					lowSlackRisk(features, TASK_CRITICAL_PATH_SLACK)));
+					lowSlackRisk(features, TaskFeatureExtractor.IDX_WORKFLOW_NORMALIZED_SLACK),
+					violationRisk(features, TaskFeatureExtractor.IDX_VIOLATION_RISK),
+					lowSlackRisk(features, TaskFeatureExtractor.IDX_CRITICAL_PATH_SLACK)));
 		}
 		if(ConstraintAwareWeightingConfig.MODE_DEADLINE_RISK.equals(config.getRiskWeightMode()))
 		{
 			return weightFromRisk(maxRisk(
-					lowSlackRisk(features, TASK_WORKFLOW_NORMALIZED_SLACK),
-					violationRisk(features, TASK_VIOLATION_RISK),
-					lowSlackRisk(features, TASK_CRITICAL_PATH_SLACK),
-					remainingCriticalPathRisk(features, TASK_REMAINING_CRITICAL_PATH)));
+					lowSlackRisk(features, TaskFeatureExtractor.IDX_WORKFLOW_NORMALIZED_SLACK),
+					violationRisk(features, TaskFeatureExtractor.IDX_VIOLATION_RISK),
+					lowSlackRisk(features, TaskFeatureExtractor.IDX_CRITICAL_PATH_SLACK),
+					remainingCriticalPathRisk(features, TaskFeatureExtractor.IDX_REMAINING_CRITICAL_PATH)));
 		}
 		return WeightResult.fallback("unsupported-task-risk-weight-mode");
 	}
@@ -65,10 +55,10 @@ public final class ConstraintAwareSampleWeighter
 				|| ConstraintAwareWeightingConfig.MODE_DEADLINE_RISK.equals(config.getRiskWeightMode()))
 		{
 			return weightFromRisk(maxRisk(
-					infeasibleRisk(features, VM_FEASIBLE_UNDER_SUB_DEADLINE),
-					lowSlackRisk(features, VM_WORKFLOW_NORMALIZED_SLACK),
-					violationRisk(features, VM_VIOLATION_RISK),
-					lowSlackRisk(features, VM_CRITICAL_PATH_SLACK)));
+					infeasibleRisk(features, VmFeatureExtractor.IDX_FEASIBLE_UNDER_SUB_DEADLINE),
+					lowSlackRisk(features, VmFeatureExtractor.IDX_WORKFLOW_NORMALIZED_SLACK),
+					violationRisk(features, VmFeatureExtractor.IDX_VIOLATION_RISK),
+					lowSlackRisk(features, VmFeatureExtractor.IDX_CRITICAL_PATH_SLACK)));
 		}
 		return WeightResult.fallback("unsupported-vm-risk-weight-mode");
 	}

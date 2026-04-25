@@ -6,6 +6,10 @@ import vmInfo.VmResource.VmParameter;
 public final class VmFeatureExtractor
 {
 	public static final int INPUT_SIZE = 19;
+	public static final int IDX_FEASIBLE_UNDER_SUB_DEADLINE = 9;
+	public static final int IDX_CRITICAL_PATH_SLACK = 12;
+	public static final int IDX_WORKFLOW_NORMALIZED_SLACK = 13;
+	public static final int IDX_VIOLATION_RISK = 14;
 
 	public double[] extract(TaskCandidateView selectedTask, VmCandidateView candidate, SchedulingState state)
 	{
@@ -37,12 +41,12 @@ public final class VmFeatureExtractor
 		features[6] = normalizeTime(candidate.getEstimatedFinishTimeIfAssigned(), workflowState, workflowWindow);
 		features[7] = scale(candidate.getEstimatedCostIfAssigned(), 1000.0);
 		features[8] = scale(candidate.getIdleGapFitScore(), StaticfinalTags.VmSlot);
-		features[9] = candidate.getFeasibleUnderSubDeadline() ? 1.0 : 0.0;
+		features[IDX_FEASIBLE_UNDER_SUB_DEADLINE] = candidate.getFeasibleUnderSubDeadline() ? 1.0 : 0.0;
 		features[10] = normalizeTime(selectedTask.getEarliestFinishTime(), workflowState, workflowWindow);
 		features[11] = normalizeTime(selectedTask.getSubDeadline(), workflowState, workflowWindow);
-		features[12] = normalizeTime(taskState == null ? 0 : taskState.getCriticalPathSlack(), workflowState, workflowWindow);
-		features[13] = workflowState == null ? 0.0 : workflowState.getNormalizedSlack();
-		features[14] = workflowState == null ? 0.0 : cap(workflowState.getViolationRiskScore(), 10.0) / 10.0;
+		features[IDX_CRITICAL_PATH_SLACK] = normalizeTime(taskState == null ? 0 : taskState.getCriticalPathSlack(), workflowState, workflowWindow);
+		features[IDX_WORKFLOW_NORMALIZED_SLACK] = workflowState == null ? 0.0 : workflowState.getNormalizedSlack();
+		features[IDX_VIOLATION_RISK] = workflowState == null ? 0.0 : cap(workflowState.getViolationRiskScore(), 10.0) / 10.0;
 		features[15] = state == null ? 0.0 : scale(state.getActiveVmStates().size(), 100.0);
 		features[16] = unitPrice / 10.0;
 		features[17] = vmFactor / 10.0;

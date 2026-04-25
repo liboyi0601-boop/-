@@ -62,7 +62,9 @@ public final class OfflineWarmStartTrainer
 		for(int epoch = 0; epoch < epochs; epoch++)
 		{
 			double taskLossSum = 0.0;
-			EpochWeightStats weightStats = weightingConfig.isWeightedLossEnabled() ? new EpochWeightStats() : null;
+			EpochWeightStats weightStats = weightingConfig.isWeightedLossEnabled()
+					? new EpochWeightStats(weightingConfig.getMaxSampleWeight())
+					: null;
 			for(MaskedDecisionExample example: replayBuffer.getTaskExamples())
 			{
 				if(weightStats == null)
@@ -192,6 +194,7 @@ public final class OfflineWarmStartTrainer
 
 	private static final class EpochWeightStats
 	{
+		private final double highWeightThreshold;
 		private int taskCount;
 		private int vmCount;
 		private double taskUnweightedLossSum;
@@ -202,8 +205,17 @@ public final class OfflineWarmStartTrainer
 		private double vmWeightSum;
 		private double maxTaskWeight = 1.0;
 		private double maxVmWeight = 1.0;
+		private double minTaskWeight = Double.POSITIVE_INFINITY;
+		private double minVmWeight = Double.POSITIVE_INFINITY;
+		private int highTaskWeightCount;
+		private int highVmWeightCount;
 		private int fallbackCount;
 		private final Map<String, Integer> fallbackReasonCounts = new LinkedHashMap<String, Integer>();
+
+		private EpochWeightStats(double maxSampleWeight)
+		{
+			this.highWeightThreshold = Math.max(1.0, maxSampleWeight * 0.8);
+		}
 
 		private void recordTask(ConstraintAwareSampleWeighter.WeightResult weightResult,
 				double unweightedLoss, double weightedLoss)
@@ -213,6 +225,11 @@ public final class OfflineWarmStartTrainer
 			taskWeightedLossSum += safeValue(weightedLoss);
 			taskWeightSum += weightResult.getSampleWeight();
 			maxTaskWeight = Math.max(maxTaskWeight, weightResult.getSampleWeight());
+			minTaskWeight = Math.min(minTaskWeight, weightResult.getSampleWeight());
+			if(weightResult.getSampleWeight() >= highWeightThreshold)
+			{
+				highTaskWeightCount++;
+			}
 			recordFallback(weightResult);
 		}
 
@@ -224,6 +241,11 @@ public final class OfflineWarmStartTrainer
 			vmWeightedLossSum += safeValue(weightedLoss);
 			vmWeightSum += weightResult.getSampleWeight();
 			maxVmWeight = Math.max(maxVmWeight, weightResult.getSampleWeight());
+			minVmWeight = Math.min(minVmWeight, weightResult.getSampleWeight());
+			if(weightResult.getSampleWeight() >= highWeightThreshold)
+			{
+				highVmWeightCount++;
+			}
 			recordFallback(weightResult);
 		}
 
@@ -250,8 +272,15 @@ public final class OfflineWarmStartTrainer
 			metrics.put("weightedVmLoss", averageVmWeightedLoss());
 			metrics.put("averageTaskSampleWeight", averageTaskSampleWeight());
 			metrics.put("averageVmSampleWeight", averageVmSampleWeight());
+			metrics.put("minTaskSampleWeight", minTaskSampleWeight());
+			metrics.put("minVmSampleWeight", minVmSampleWeight());
 			metrics.put("maxTaskSampleWeight", maxTaskWeight);
 			metrics.put("maxVmSampleWeight", maxVmWeight);
+			metrics.put("highTaskWeightRatio", highTaskWeightRatio());
+			metrics.put("highVmWeightRatio", highVmWeightRatio());
+			metrics.put("taskWeightSaturationWarning", taskWeightSaturationWarning());
+			metrics.put("vmWeightSaturationWarning", vmWeightSaturationWarning());
+			metrics.put("highSampleWeightThreshold", highWeightThreshold);
 			metrics.put("weightingFallbackCount", fallbackCount);
 			metrics.put("weightingFallbackReasonCounts", new LinkedHashMap<String, Integer>(fallbackReasonCounts));
 			return metrics;
@@ -262,12 +291,20 @@ public final class OfflineWarmStartTrainer
 			Map<String, Object> summary = new LinkedHashMap<String, Object>();
 			Map<String, Object> taskWeightStats = new LinkedHashMap<String, Object>();
 			taskWeightStats.put("averageSampleWeight", averageTaskSampleWeight());
+			taskWeightStats.put("minSampleWeight", minTaskSampleWeight());
 			taskWeightStats.put("maxSampleWeight", maxTaskWeight);
+			taskWeightStats.put("highSampleWeightThreshold", highWeightThreshold);
+			taskWeightStats.put("highWeightRatio", highTaskWeightRatio());
+			taskWeightStats.put("saturationWarning", taskWeightSaturationWarning());
 			taskWeightStats.put("unweightedLoss", averageTaskUnweightedLoss());
 			taskWeightStats.put("weightedLoss", averageTaskWeightedLoss());
 			Map<String, Object> vmWeightStats = new LinkedHashMap<String, Object>();
 			vmWeightStats.put("averageSampleWeight", averageVmSampleWeight());
+			vmWeightStats.put("minSampleWeight", minVmSampleWeight());
 			vmWeightStats.put("maxSampleWeight", maxVmWeight);
+			vmWeightStats.put("highSampleWeightThreshold", highWeightThreshold);
+			vmWeightStats.put("highWeightRatio", highVmWeightRatio());
+			vmWeightStats.put("saturationWarning", vmWeightSaturationWarning());
 			vmWeightStats.put("unweightedLoss", averageVmUnweightedLoss());
 			vmWeightStats.put("weightedLoss", averageVmWeightedLoss());
 			summary.put("taskWeightStats", taskWeightStats);
@@ -306,6 +343,36 @@ public final class OfflineWarmStartTrainer
 		private double averageVmSampleWeight()
 		{
 			return vmCount == 0 ? 1.0 : vmWeightSum / vmCount;
+		}
+
+		private double minTaskSampleWeight()
+		{
+			return taskCount == 0 ? 1.0 : minTaskWeight;
+		}
+
+		private double minVmSampleWeight()
+		{
+			return vmCount == 0 ? 1.0 : minVmWeight;
+		}
+
+		private double highTaskWeightRatio()
+		{
+			return taskCount == 0 ? 0.0 : (double)highTaskWeightCount / taskCount;
+		}
+
+		private double highVmWeightRatio()
+		{
+			return vmCount == 0 ? 0.0 : (double)highVmWeightCount / vmCount;
+		}
+
+		private boolean taskWeightSaturationWarning()
+		{
+			return highTaskWeightRatio() > 0.5;
+		}
+
+		private boolean vmWeightSaturationWarning()
+		{
+			return highVmWeightRatio() > 0.5;
 		}
 
 		private static double safeValue(double value)

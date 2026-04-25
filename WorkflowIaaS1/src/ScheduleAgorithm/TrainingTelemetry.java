@@ -35,8 +35,15 @@ public final class TrainingTelemetry
 		copyOptional(trainingMetrics, record, "weightedVmLoss");
 		copyOptional(trainingMetrics, record, "averageTaskSampleWeight");
 		copyOptional(trainingMetrics, record, "averageVmSampleWeight");
+		copyOptional(trainingMetrics, record, "minTaskSampleWeight");
+		copyOptional(trainingMetrics, record, "minVmSampleWeight");
 		copyOptional(trainingMetrics, record, "maxTaskSampleWeight");
 		copyOptional(trainingMetrics, record, "maxVmSampleWeight");
+		copyOptional(trainingMetrics, record, "highTaskWeightRatio");
+		copyOptional(trainingMetrics, record, "highVmWeightRatio");
+		copyOptional(trainingMetrics, record, "taskWeightSaturationWarning");
+		copyOptional(trainingMetrics, record, "vmWeightSaturationWarning");
+		copyOptional(trainingMetrics, record, "highSampleWeightThreshold");
 		copyOptional(trainingMetrics, record, "weightingFallbackCount");
 		copyOptional(trainingMetrics, record, "weightingFallbackReasonCounts");
 		record.put("totalCost", experimentMetrics.getTotalCost());
