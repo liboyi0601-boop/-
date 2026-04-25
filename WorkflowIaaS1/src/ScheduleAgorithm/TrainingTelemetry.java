@@ -35,6 +35,10 @@ public final class TrainingTelemetry
 		copyOptional(trainingMetrics, record, "weightedVmLoss");
 		copyOptional(trainingMetrics, record, "averageTaskSampleWeight");
 		copyOptional(trainingMetrics, record, "averageVmSampleWeight");
+		copyOptional(trainingMetrics, record, "averageTaskRiskScore");
+		copyOptional(trainingMetrics, record, "averageVmRiskScore");
+		copyOptional(trainingMetrics, record, "maxTaskRiskScore");
+		copyOptional(trainingMetrics, record, "maxVmRiskScore");
 		copyOptional(trainingMetrics, record, "minTaskSampleWeight");
 		copyOptional(trainingMetrics, record, "minVmSampleWeight");
 		copyOptional(trainingMetrics, record, "maxTaskSampleWeight");

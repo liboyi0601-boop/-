@@ -36,6 +36,15 @@ public final class ConstraintAwareSampleWeighter
 					lowSlackRisk(features, TaskFeatureExtractor.IDX_CRITICAL_PATH_SLACK),
 					remainingCriticalPathRisk(features, TaskFeatureExtractor.IDX_REMAINING_CRITICAL_PATH)));
 		}
+		if(ConstraintAwareWeightingConfig.MODE_SEVERITY_AWARE.equals(config.getRiskWeightMode()))
+		{
+			return weightFromRisk(maxRisk(
+					lowSlackRisk(features, TaskFeatureExtractor.IDX_WORKFLOW_NORMALIZED_SLACK),
+					violationRisk(features, TaskFeatureExtractor.IDX_VIOLATION_RISK),
+					lowSlackRisk(features, TaskFeatureExtractor.IDX_CRITICAL_PATH_SLACK),
+					latenessRisk(features, TaskFeatureExtractor.IDX_EARLIEST_FINISH,
+							TaskFeatureExtractor.IDX_SUB_DEADLINE)));
+		}
 		return WeightResult.fallback("unsupported-task-risk-weight-mode");
 	}
 
@@ -59,6 +68,16 @@ public final class ConstraintAwareSampleWeighter
 					lowSlackRisk(features, VmFeatureExtractor.IDX_WORKFLOW_NORMALIZED_SLACK),
 					violationRisk(features, VmFeatureExtractor.IDX_VIOLATION_RISK),
 					lowSlackRisk(features, VmFeatureExtractor.IDX_CRITICAL_PATH_SLACK)));
+		}
+		if(ConstraintAwareWeightingConfig.MODE_SEVERITY_AWARE.equals(config.getRiskWeightMode()))
+		{
+			return weightFromRisk(maxRisk(
+					infeasibleRisk(features, VmFeatureExtractor.IDX_FEASIBLE_UNDER_SUB_DEADLINE),
+					lowSlackRisk(features, VmFeatureExtractor.IDX_WORKFLOW_NORMALIZED_SLACK),
+					violationRisk(features, VmFeatureExtractor.IDX_VIOLATION_RISK),
+					lowSlackRisk(features, VmFeatureExtractor.IDX_CRITICAL_PATH_SLACK),
+					latenessRisk(features, VmFeatureExtractor.IDX_ESTIMATED_FINISH_IF_ASSIGNED,
+							VmFeatureExtractor.IDX_SELECTED_TASK_SUB_DEADLINE)));
 		}
 		return WeightResult.fallback("unsupported-vm-risk-weight-mode");
 	}
@@ -96,6 +115,11 @@ public final class ConstraintAwareSampleWeighter
 	private double maxRisk(double first, double second, double third, double fourth)
 	{
 		return maxRisk(new double[] {first, second, third, fourth});
+	}
+
+	private double maxRisk(double first, double second, double third, double fourth, double fifth)
+	{
+		return maxRisk(new double[] {first, second, third, fourth, fifth});
 	}
 
 	private double maxRisk(double[] values)
@@ -138,6 +162,17 @@ public final class ConstraintAwareSampleWeighter
 			return Double.NaN;
 		}
 		return value.doubleValue() >= 0.5 ? 0.0 : 1.0;
+	}
+
+	private double latenessRisk(double[] features, int finishIndex, int deadlineIndex)
+	{
+		Double finishValue = featureValue(features, finishIndex);
+		Double deadlineValue = featureValue(features, deadlineIndex);
+		if(finishValue == null || deadlineValue == null)
+		{
+			return Double.NaN;
+		}
+		return clamp01(Math.max(0.0, finishValue.doubleValue() - deadlineValue.doubleValue()));
 	}
 
 	private Double featureValue(double[] features, int index)

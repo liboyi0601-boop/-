@@ -203,6 +203,10 @@ public final class OfflineWarmStartTrainer
 		private double vmWeightedLossSum;
 		private double taskWeightSum;
 		private double vmWeightSum;
+		private double taskRiskScoreSum;
+		private double vmRiskScoreSum;
+		private double maxTaskRiskScore;
+		private double maxVmRiskScore;
 		private double maxTaskWeight = 1.0;
 		private double maxVmWeight = 1.0;
 		private double minTaskWeight = Double.POSITIVE_INFINITY;
@@ -224,6 +228,8 @@ public final class OfflineWarmStartTrainer
 			taskUnweightedLossSum += safeValue(unweightedLoss);
 			taskWeightedLossSum += safeValue(weightedLoss);
 			taskWeightSum += weightResult.getSampleWeight();
+			taskRiskScoreSum += weightResult.getRiskScore();
+			maxTaskRiskScore = Math.max(maxTaskRiskScore, weightResult.getRiskScore());
 			maxTaskWeight = Math.max(maxTaskWeight, weightResult.getSampleWeight());
 			minTaskWeight = Math.min(minTaskWeight, weightResult.getSampleWeight());
 			if(weightResult.getSampleWeight() >= highWeightThreshold)
@@ -240,6 +246,8 @@ public final class OfflineWarmStartTrainer
 			vmUnweightedLossSum += safeValue(unweightedLoss);
 			vmWeightedLossSum += safeValue(weightedLoss);
 			vmWeightSum += weightResult.getSampleWeight();
+			vmRiskScoreSum += weightResult.getRiskScore();
+			maxVmRiskScore = Math.max(maxVmRiskScore, weightResult.getRiskScore());
 			maxVmWeight = Math.max(maxVmWeight, weightResult.getSampleWeight());
 			minVmWeight = Math.min(minVmWeight, weightResult.getSampleWeight());
 			if(weightResult.getSampleWeight() >= highWeightThreshold)
@@ -272,6 +280,10 @@ public final class OfflineWarmStartTrainer
 			metrics.put("weightedVmLoss", averageVmWeightedLoss());
 			metrics.put("averageTaskSampleWeight", averageTaskSampleWeight());
 			metrics.put("averageVmSampleWeight", averageVmSampleWeight());
+			metrics.put("averageTaskRiskScore", averageTaskRiskScore());
+			metrics.put("averageVmRiskScore", averageVmRiskScore());
+			metrics.put("maxTaskRiskScore", maxTaskRiskScore);
+			metrics.put("maxVmRiskScore", maxVmRiskScore);
 			metrics.put("minTaskSampleWeight", minTaskSampleWeight());
 			metrics.put("minVmSampleWeight", minVmSampleWeight());
 			metrics.put("maxTaskSampleWeight", maxTaskWeight);
@@ -291,6 +303,8 @@ public final class OfflineWarmStartTrainer
 			Map<String, Object> summary = new LinkedHashMap<String, Object>();
 			Map<String, Object> taskWeightStats = new LinkedHashMap<String, Object>();
 			taskWeightStats.put("averageSampleWeight", averageTaskSampleWeight());
+			taskWeightStats.put("averageRiskScore", averageTaskRiskScore());
+			taskWeightStats.put("maxRiskScore", maxTaskRiskScore);
 			taskWeightStats.put("minSampleWeight", minTaskSampleWeight());
 			taskWeightStats.put("maxSampleWeight", maxTaskWeight);
 			taskWeightStats.put("highSampleWeightThreshold", highWeightThreshold);
@@ -300,6 +314,8 @@ public final class OfflineWarmStartTrainer
 			taskWeightStats.put("weightedLoss", averageTaskWeightedLoss());
 			Map<String, Object> vmWeightStats = new LinkedHashMap<String, Object>();
 			vmWeightStats.put("averageSampleWeight", averageVmSampleWeight());
+			vmWeightStats.put("averageRiskScore", averageVmRiskScore());
+			vmWeightStats.put("maxRiskScore", maxVmRiskScore);
 			vmWeightStats.put("minSampleWeight", minVmSampleWeight());
 			vmWeightStats.put("maxSampleWeight", maxVmWeight);
 			vmWeightStats.put("highSampleWeightThreshold", highWeightThreshold);
@@ -343,6 +359,16 @@ public final class OfflineWarmStartTrainer
 		private double averageVmSampleWeight()
 		{
 			return vmCount == 0 ? 1.0 : vmWeightSum / vmCount;
+		}
+
+		private double averageTaskRiskScore()
+		{
+			return taskCount == 0 ? 0.0 : taskRiskScoreSum / taskCount;
+		}
+
+		private double averageVmRiskScore()
+		{
+			return vmCount == 0 ? 0.0 : vmRiskScoreSum / vmCount;
 		}
 
 		private double minTaskSampleWeight()

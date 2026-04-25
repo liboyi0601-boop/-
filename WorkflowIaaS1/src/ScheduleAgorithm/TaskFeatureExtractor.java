@@ -3,6 +3,8 @@ package ScheduleAgorithm;
 public final class TaskFeatureExtractor
 {
 	public static final int INPUT_SIZE = 19;
+	public static final int IDX_EARLIEST_FINISH = 3;
+	public static final int IDX_SUB_DEADLINE = 4;
 	public static final int IDX_CRITICAL_PATH_SLACK = 8;
 	public static final int IDX_WORKFLOW_NORMALIZED_SLACK = 12;
 	public static final int IDX_VIOLATION_RISK = 13;
@@ -20,8 +22,8 @@ public final class TaskFeatureExtractor
 		features[0] = 1.0;
 		features[1] = normalizeTime(state == null ? 0 : state.getCurrentTime(), workflowState, workflowWindow);
 		features[2] = normalizeTime(candidate.getEarliestStartTime(), workflowState, workflowWindow);
-		features[3] = normalizeTime(candidate.getEarliestFinishTime(), workflowState, workflowWindow);
-		features[4] = normalizeTime(candidate.getSubDeadline(), workflowState, workflowWindow);
+		features[IDX_EARLIEST_FINISH] = normalizeTime(candidate.getEarliestFinishTime(), workflowState, workflowWindow);
+		features[IDX_SUB_DEADLINE] = normalizeTime(candidate.getSubDeadline(), workflowState, workflowWindow);
 		features[5] = candidate.getPriority() / 100.0;
 		features[6] = normalizeTime(taskState == null ? 0 : taskState.getUpwardRank(), workflowState, workflowWindow);
 		features[7] = normalizeTime(taskState == null ? 0 : taskState.getDownwardRank(), workflowState, workflowWindow);

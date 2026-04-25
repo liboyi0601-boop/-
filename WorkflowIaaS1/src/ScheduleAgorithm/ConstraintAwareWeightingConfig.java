@@ -8,6 +8,7 @@ public final class ConstraintAwareWeightingConfig
 	public static final String MODE_NONE = "none";
 	public static final String MODE_LOW_SLACK = "low-slack";
 	public static final String MODE_DEADLINE_RISK = "deadline-risk";
+	public static final String MODE_SEVERITY_AWARE = "severity-aware";
 
 	private final boolean enabled;
 	private final String riskWeightMode;
@@ -53,7 +54,8 @@ public final class ConstraintAwareWeightingConfig
 
 	public static boolean isSupportedMode(String mode)
 	{
-		return MODE_NONE.equals(mode) || MODE_LOW_SLACK.equals(mode) || MODE_DEADLINE_RISK.equals(mode);
+		return MODE_NONE.equals(mode) || MODE_LOW_SLACK.equals(mode)
+				|| MODE_DEADLINE_RISK.equals(mode) || MODE_SEVERITY_AWARE.equals(mode);
 	}
 
 	public boolean isEnabled()
@@ -92,6 +94,8 @@ public final class ConstraintAwareWeightingConfig
 		summary.put("weightedLossEnabled", isWeightedLossEnabled());
 		summary.put("weightFormula", "sampleWeight = clamp(1.0 + riskWeightScale * riskScore, 1.0, maxSampleWeight)");
 		summary.put("riskScoreRange", "[0, 1]");
+		summary.put("supportedRiskWeightModes",
+				MODE_NONE + "," + MODE_LOW_SLACK + "," + MODE_DEADLINE_RISK + "," + MODE_SEVERITY_AWARE);
 		return summary;
 	}
 }

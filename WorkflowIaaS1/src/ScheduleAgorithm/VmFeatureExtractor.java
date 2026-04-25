@@ -6,7 +6,9 @@ import vmInfo.VmResource.VmParameter;
 public final class VmFeatureExtractor
 {
 	public static final int INPUT_SIZE = 19;
+	public static final int IDX_ESTIMATED_FINISH_IF_ASSIGNED = 6;
 	public static final int IDX_FEASIBLE_UNDER_SUB_DEADLINE = 9;
+	public static final int IDX_SELECTED_TASK_SUB_DEADLINE = 11;
 	public static final int IDX_CRITICAL_PATH_SLACK = 12;
 	public static final int IDX_WORKFLOW_NORMALIZED_SLACK = 13;
 	public static final int IDX_VIOLATION_RISK = 14;
@@ -38,12 +40,12 @@ public final class VmFeatureExtractor
 		features[3] = normalizeTime(state == null ? 0 : state.getCurrentTime(), workflowState, workflowWindow);
 		features[4] = normalizeTime(resolveDataArrival(candidate), workflowState, workflowWindow);
 		features[5] = normalizeTime(candidate.getEstimatedReadyStartTime(), workflowState, workflowWindow);
-		features[6] = normalizeTime(candidate.getEstimatedFinishTimeIfAssigned(), workflowState, workflowWindow);
+		features[IDX_ESTIMATED_FINISH_IF_ASSIGNED] = normalizeTime(candidate.getEstimatedFinishTimeIfAssigned(), workflowState, workflowWindow);
 		features[7] = scale(candidate.getEstimatedCostIfAssigned(), 1000.0);
 		features[8] = scale(candidate.getIdleGapFitScore(), StaticfinalTags.VmSlot);
 		features[IDX_FEASIBLE_UNDER_SUB_DEADLINE] = candidate.getFeasibleUnderSubDeadline() ? 1.0 : 0.0;
 		features[10] = normalizeTime(selectedTask.getEarliestFinishTime(), workflowState, workflowWindow);
-		features[11] = normalizeTime(selectedTask.getSubDeadline(), workflowState, workflowWindow);
+		features[IDX_SELECTED_TASK_SUB_DEADLINE] = normalizeTime(selectedTask.getSubDeadline(), workflowState, workflowWindow);
 		features[IDX_CRITICAL_PATH_SLACK] = normalizeTime(taskState == null ? 0 : taskState.getCriticalPathSlack(), workflowState, workflowWindow);
 		features[IDX_WORKFLOW_NORMALIZED_SLACK] = workflowState == null ? 0.0 : workflowState.getNormalizedSlack();
 		features[IDX_VIOLATION_RISK] = workflowState == null ? 0.0 : cap(workflowState.getViolationRiskScore(), 10.0) / 10.0;
